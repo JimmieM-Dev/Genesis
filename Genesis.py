@@ -263,36 +263,51 @@ else:
     if not st.session_state.get("last_selected_accounts"):
         st.session_state["last_selected_accounts"] 
 
-# ---------------- Prepare filtered trades safely ----------------
 # -------------------- Initialize Imports and Trades --------------------
 
 # Ensure imports dict exists
 if "imports" not in st.session_state:
     st.session_state["imports"] = {}
 
-# Get all import names
+# -------------------- AUTO-LOAD DEMO DATA IF EMPTY --------------------
+if len(st.session_state["imports"]) == 0:
+    demo_df = pd.DataFrame({
+        "Ticket": [1, 2],
+        "Symbol": ["EURUSD", "GBPUSD"],
+        "OpenTime": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        "CloseTime": pd.to_datetime(["2024-01-01 05:00", "2024-01-02 07:00"]),
+        "Profit": [25.5, -13.2],
+        "ActionOpen": ["BUY", "SELL"]
+    })
+    demo_df["Date"] = demo_df["OpenTime"].dt.normalize()
+
+    st.session_state["imports"]["DEMO DATA"] = {
+        "raw": demo_df.copy(),
+        "grouped": demo_df.copy()
+    }
+
+# Refresh import list
 import_names = list(st.session_state["imports"].keys())
 
-# Ensure last_added exists safely
-if import_names:
-    st.session_state["last_added"] = st.session_state.get("last_added", import_names[0])
-else:
-    st.session_state["last_added"] = None
+# -------------------- AUTO-SELECT DEMO ACCOUNT --------------------
+if "last_selected_accounts" not in st.session_state:
+    st.session_state["last_selected_accounts"] = ["DEMO DATA"]
 
-# Sidebar multiselect for accounts
 selected_accounts = st.sidebar.multiselect(
-    "Account(s)", import_names, default=st.session_state.get("last_selected_accounts", [])
+    "Account(s)",
+    import_names,
+    default=st.session_state["last_selected_accounts"]
 )
 st.session_state["last_selected_accounts"] = selected_accounts
 
-# Combine raw and grouped data from selected imports
+# -------------------- Combine raw + grouped --------------------
 combined_raw, combined_grouped = [], []
 
 for name in selected_accounts:
     entry = st.session_state["imports"].get(name, {"raw": pd.DataFrame(), "grouped": pd.DataFrame()})
     df_raw = entry.get("raw", pd.DataFrame()).copy()
     df_group = entry.get("grouped", pd.DataFrame()).copy()
-    
+
     if not df_raw.empty:
         df_raw["Account"] = name
     if not df_group.empty:
@@ -301,11 +316,10 @@ for name in selected_accounts:
     combined_raw.append(df_raw)
     combined_grouped.append(df_group)
 
-# Merge into single DataFrames
 raw_df = pd.concat([d for d in combined_raw if not d.empty], ignore_index=True) if combined_raw else pd.DataFrame()
 trades = pd.concat([g for g in combined_grouped if not g.empty], ignore_index=True) if combined_grouped else pd.DataFrame()
 
-# Ensure 'Date' column exists in trades
+# Ensure Date column exists
 if trades.empty:
     trades = pd.DataFrame(columns=["Ticket", "Symbol", "OpenTime", "CloseTime", "Profit", "Date", "ActionOpen"])
 
@@ -314,7 +328,7 @@ if "Date" not in trades.columns and "OpenTime" in trades.columns:
 else:
     trades["Date"] = pd.to_datetime(trades.get("Date"), errors="coerce")
 
-# Filter trades safely based on symbols and date range
+# -------------------- Filtering --------------------
 if not trades.empty:
     symbols_all = sorted(trades["Symbol"].fillna("UNKNOWN").unique())
     sel_syms = st.sidebar.multiselect("Symbols", symbols_all, default=symbols_all)
@@ -327,27 +341,24 @@ if not trades.empty:
     end_dt = pd.to_datetime(date_range[1]) + pd.Timedelta(hours=23, minutes=59)
 
     filtered = trades[
-        trades["Symbol"].isin(sel_syms) & trades["Date"].between(start_dt, end_dt)
+        trades["Symbol"].isin(sel_syms) &
+        trades["Date"].between(start_dt, end_dt)
     ].copy()
 else:
     filtered = pd.DataFrame()
 
-# ---------------- Compute metrics ----------------
+# -------------------- Compute Metrics --------------------
 total_trades = len(filtered)
 
-# Total Profit
 total_profit = filtered["Profit"].sum() if "Profit" in filtered.columns else 0.0
-
-# Profit Factor
 pf = profit_factor(filtered) if "Profit" in filtered.columns else 0.0
 
-# Trade Expectancy
 if "Profit" in filtered.columns:
     avg_win, avg_loss, expectancy = trade_expectancy(filtered)
 else:
     avg_win, avg_loss, expectancy = 0.0, 0.0, 0.0
 
-# Wins: safe check
+# Wins
 if "Win" in filtered.columns:
     wins = filtered["Win"].sum()
 elif "Profit" in filtered.columns:
@@ -355,8 +366,7 @@ elif "Profit" in filtered.columns:
 else:
     wins = 0
 
-# Win rate
-win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+win_rate = (wins / total_trades * 100) if total_trades else 0.0
 
 # Avg Win/Loss Ratio
 if avg_loss > 0:
@@ -365,6 +375,7 @@ elif avg_win > 0:
     avg_win_loss_ratio = avg_win
 else:
     avg_win_loss_ratio = 0.0
+
 
 # ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
 from datetime import datetime, timedelta
@@ -975,6 +986,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
