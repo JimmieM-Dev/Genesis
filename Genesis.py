@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import MetaTrader5 as mt5  # optional; used if you connect MT5
 from datetime import datetime, date, timedelta
 
 # ---------------- Page config ----------------
@@ -252,6 +253,84 @@ if st.session_state.get("sidebar_manual_open", False):
                 except Exception as e:
                     st.sidebar.error(f"Failed {f.name}: {e}")
 
+# ---------------- Automatic MT5 Imports ----------------
+if st.session_state.get("sidebar_auto_open", False):
+    st.sidebar.markdown("<div class='small-muted-2'>Automatic — connect to MT5</div>", unsafe_allow_html=True)
+    login = st.text_input("Login", key="mt5_login")
+    password = st.text_input("Password", type="password", key="mt5_password")
+    server = st.text_input("Server", key="mt5_server")
+    acct_label = st.text_input("Account label (optional)", key="mt5_label")
+
+    if "mt5_accounts" not in st.session_state:
+        st.session_state["mt5_accounts"] = []
+
+    from datetime import datetime as _dt, timedelta as _td
+
+    def connect_and_fetch_mt5(login, password, server, label=None):
+        """Connects to MT5, fetches trade history, stores in session_state."""
+        try:
+            if not mt5.initialize():
+                return False, f"MT5 initialize() failed: {mt5.last_error()}"
+            if not mt5.login(int(login), password=password, server=server):
+                mt5.shutdown()
+                return False, f"MT5 login failed: {mt5.last_error()}"
+            end_time = _dt.utcnow()
+            start_time = end_time - _td(days=365)
+            trades = mt5.history_deals_get(start_time, end_time)
+            if not trades:
+                df = pd.DataFrame()
+                grouped = pd.DataFrame()
+            else:
+                df = pd.DataFrame([t._asdict() for t in trades])
+                df, grouped = process_mt5_df(df)
+
+            key = label.strip() if label else f"MT5-{login}"
+            base, i = key, 1
+            if "imports" not in st.session_state:
+                st.session_state["imports"] = {}
+            while key in st.session_state["imports"]:
+                key = f"{base} ({i})"
+                i += 1
+            st.session_state["imports"][key] = {"raw": df, "grouped": grouped}
+            st.session_state["last_added"] = key
+            st.session_state["last_import_ts"] = datetime.utcnow()
+            if not any(acct.get("login")==login and acct.get("server")==server for acct in st.session_state["mt5_accounts"]):
+                st.session_state["mt5_accounts"].append({"login": login, "server": server, "label": key})
+            mt5.shutdown()
+            return True, f"Imported MT5 account {key}"
+        except Exception as e:
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            return False, str(e)
+
+    if st.sidebar.button("Connect & Fetch MT5"):
+        if not (login and password and server):
+            st.sidebar.error("Fill all MT5 fields")
+        else:
+            success, msg = connect_and_fetch_mt5(login, password, server, acct_label)
+            if success:
+                st.sidebar.success(msg)
+            else:
+                st.sidebar.error(msg)
+
+    # list previously connected accounts
+    if st.session_state["mt5_accounts"]:
+        st.sidebar.markdown("<hr>", unsafe_allow_html=True)
+        for i, acct in enumerate(st.session_state["mt5_accounts"]):
+            cols = st.sidebar.columns([3,1])
+            cols[0].markdown(f"**{acct['label']}**")
+            if cols[1].button("Sync now", key=f"sync_{i}"):
+                success, msg = connect_and_fetch_mt5(acct["login"], password="", server=acct["server"], label=acct["label"])
+                if success:
+                    st.sidebar.success(f"Synced {acct['label']}")
+                else:
+                    st.sidebar.error(f"Failed syncing {acct['label']}: {msg}")
+
+# ---------------- Prepare filtered trades safely ----------------
+if "imports" not in st.session_state:
+    st.session_state["imports"] = {}
 
 import_names = list(st.session_state["imports"].keys())
 if not import_names:
@@ -261,121 +340,53 @@ if not import_names:
     filtered = trades.copy()
 else:
     if not st.session_state.get("last_selected_accounts"):
-        st.session_state["last_selected_accounts"] 
+        st.session_state["last_selected_accounts"] = [st.session_state.get("last_added", import_names[0])]
+    selected_accounts = st.sidebar.multiselect("Account(s)", import_names, default=st.session_state["last_selected_accounts"])
+    st.session_state["last_selected_accounts"] = selected_accounts
 
-# -------------------- Initialize Imports and Trades --------------------
+    combined_raw, combined_grouped = [], []
+    for name in selected_accounts:
+        entry = st.session_state["imports"].get(name, {"raw": pd.DataFrame(), "grouped": pd.DataFrame()})
+        df_raw = entry["raw"].copy() if entry["raw"] is not None else pd.DataFrame()
+        df_group = entry["grouped"].copy() if entry["grouped"] is not None else pd.DataFrame()
+        if not df_raw.empty:
+            df_raw["Account"] = name
+        if not df_group.empty:
+            df_group["Account"] = name
+        combined_raw.append(df_raw)
+        combined_grouped.append(df_group)
 
-# Ensure imports dict exists
-if "imports" not in st.session_state:
-    st.session_state["imports"] = {}
+    raw_df = pd.concat([d for d in combined_raw if not d.empty], ignore_index=True) if combined_raw else pd.DataFrame()
+    trades = pd.concat([g for g in combined_grouped if not g.empty], ignore_index=True) if combined_grouped else pd.DataFrame()
 
-# -------------------- AUTO-LOAD DEMO DATA IF EMPTY --------------------
-if len(st.session_state["imports"]) == 0:
-    demo_df = pd.DataFrame({
-        "Ticket": [1, 2],
-        "Symbol": ["EURUSD", "GBPUSD"],
-        "OpenTime": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-        "CloseTime": pd.to_datetime(["2024-01-01 05:00", "2024-01-02 07:00"]),
-        "Profit": [25.5, -13.2],
-        "ActionOpen": ["BUY", "SELL"]
-    })
-    demo_df["Date"] = demo_df["OpenTime"].dt.normalize()
+    # Ensure 'Date' exists
+    if trades.empty:
+        trades = pd.DataFrame(columns=["Ticket","Symbol","OpenTime","CloseTime","Profit","Date","ActionOpen"])
+    if "Date" not in trades.columns and "OpenTime" in trades.columns:
+        trades["Date"] = pd.to_datetime(trades["OpenTime"], errors="coerce").dt.normalize()
+    else:
+        trades["Date"] = pd.to_datetime(trades.get("Date"), errors="coerce")
 
-    st.session_state["imports"]["DEMO DATA"] = {
-        "raw": demo_df.copy(),
-        "grouped": demo_df.copy()
-    }
+    # Filter trades safely
+    if not trades.empty:
+        symbols_all = sorted(trades["Symbol"].fillna("UNKNOWN").unique())
+        sel_syms = st.sidebar.multiselect("Symbols", symbols_all, default=symbols_all)
+        date_min = trades["Date"].min().date()
+        date_max = trades["Date"].max().date()
+        date_range = st.sidebar.date_input("Date range", value=(date_min, date_max))
+        start_dt, end_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1]) + pd.Timedelta(hours=23, minutes=59)
+        filtered = trades[trades["Symbol"].isin(sel_syms) & trades["Date"].between(start_dt, end_dt)].copy()
+    else:
+        filtered = pd.DataFrame()
 
-# Refresh import list
-import_names = list(st.session_state["imports"].keys())
-
-# -------------------- AUTO-SELECT DEMO ACCOUNT --------------------
-if "last_selected_accounts" not in st.session_state:
-    st.session_state["last_selected_accounts"] = ["DEMO DATA"]
-
-selected_accounts = st.sidebar.multiselect(
-    "Account(s)",
-    import_names,
-    default=st.session_state["last_selected_accounts"]
-)
-st.session_state["last_selected_accounts"] = selected_accounts
-
-# -------------------- Combine raw + grouped --------------------
-combined_raw, combined_grouped = [], []
-
-for name in selected_accounts:
-    entry = st.session_state["imports"].get(name, {"raw": pd.DataFrame(), "grouped": pd.DataFrame()})
-    df_raw = entry.get("raw", pd.DataFrame()).copy()
-    df_group = entry.get("grouped", pd.DataFrame()).copy()
-
-    if not df_raw.empty:
-        df_raw["Account"] = name
-    if not df_group.empty:
-        df_group["Account"] = name
-
-    combined_raw.append(df_raw)
-    combined_grouped.append(df_group)
-
-raw_df = pd.concat([d for d in combined_raw if not d.empty], ignore_index=True) if combined_raw else pd.DataFrame()
-trades = pd.concat([g for g in combined_grouped if not g.empty], ignore_index=True) if combined_grouped else pd.DataFrame()
-
-# Ensure Date column exists
-if trades.empty:
-    trades = pd.DataFrame(columns=["Ticket", "Symbol", "OpenTime", "CloseTime", "Profit", "Date", "ActionOpen"])
-
-if "Date" not in trades.columns and "OpenTime" in trades.columns:
-    trades["Date"] = pd.to_datetime(trades["OpenTime"], errors="coerce").dt.normalize()
-else:
-    trades["Date"] = pd.to_datetime(trades.get("Date"), errors="coerce")
-
-# -------------------- Filtering --------------------
-if not trades.empty:
-    symbols_all = sorted(trades["Symbol"].fillna("UNKNOWN").unique())
-    sel_syms = st.sidebar.multiselect("Symbols", symbols_all, default=symbols_all)
-
-    date_min = trades["Date"].min().date()
-    date_max = trades["Date"].max().date()
-    date_range = st.sidebar.date_input("Date range", value=(date_min, date_max))
-
-    start_dt = pd.to_datetime(date_range[0])
-    end_dt = pd.to_datetime(date_range[1]) + pd.Timedelta(hours=23, minutes=59)
-
-    filtered = trades[
-        trades["Symbol"].isin(sel_syms) &
-        trades["Date"].between(start_dt, end_dt)
-    ].copy()
-else:
-    filtered = pd.DataFrame()
-
-# -------------------- Compute Metrics --------------------
+# ---------------- Compute metrics ----------------
 total_trades = len(filtered)
-
 total_profit = filtered["Profit"].sum() if "Profit" in filtered.columns else 0.0
-pf = profit_factor(filtered) if "Profit" in filtered.columns else 0.0
-
-if "Profit" in filtered.columns:
-    avg_win, avg_loss, expectancy = trade_expectancy(filtered)
-else:
-    avg_win, avg_loss, expectancy = 0.0, 0.0, 0.0
-
-# Wins
-if "Win" in filtered.columns:
-    wins = filtered["Win"].sum()
-elif "Profit" in filtered.columns:
-    wins = (filtered["Profit"] > 0).sum()
-else:
-    wins = 0
-
+pf = profit_factor(filtered)
+avg_win, avg_loss, expectancy = trade_expectancy(filtered)
+wins = filtered["Win"].sum() if "Win" in filtered.columns else filtered[filtered.get("Profit",0)>0].shape[0]
 win_rate = (wins / total_trades * 100) if total_trades else 0.0
-
-# Avg Win/Loss Ratio
-if avg_loss > 0:
-    avg_win_loss_ratio = avg_win / avg_loss
-elif avg_win > 0:
-    avg_win_loss_ratio = avg_win
-else:
-    avg_win_loss_ratio = 0.0
-
+avg_win_loss_ratio = (avg_win/avg_loss) if avg_loss>0 else (avg_win if avg_win>0 else 0.0)
 
 # ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
 from datetime import datetime, timedelta
@@ -986,11 +997,3 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
-
-
-
-
-
-
-
-
