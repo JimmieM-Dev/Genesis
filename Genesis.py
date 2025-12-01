@@ -334,12 +334,37 @@ else:
 
 # ---------------- Compute metrics ----------------
 total_trades = len(filtered)
+
+# Total Profit
 total_profit = filtered["Profit"].sum() if "Profit" in filtered.columns else 0.0
-pf = profit_factor(filtered)
-avg_win, avg_loss, expectancy = trade_expectancy(filtered)
-wins = filtered["Win"].sum() if "Win" in filtered.columns else filtered[filtered.get("Profit",0)>0].shape[0]
-win_rate = (wins / total_trades * 100) if total_trades else 0.0
-avg_win_loss_ratio = (avg_win/avg_loss) if avg_loss>0 else (avg_win if avg_win>0 else 0.0)
+
+# Profit Factor
+pf = profit_factor(filtered) if "Profit" in filtered.columns else 0.0
+
+# Trade Expectancy
+if "Profit" in filtered.columns:
+    avg_win, avg_loss, expectancy = trade_expectancy(filtered)
+else:
+    avg_win, avg_loss, expectancy = 0.0, 0.0, 0.0
+
+# Wins: safe check
+if "Win" in filtered.columns:
+    wins = filtered["Win"].sum()
+elif "Profit" in filtered.columns:
+    wins = (filtered["Profit"] > 0).sum()
+else:
+    wins = 0
+
+# Win rate
+win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+
+# Avg Win/Loss Ratio
+if avg_loss > 0:
+    avg_win_loss_ratio = avg_win / avg_loss
+elif avg_win > 0:
+    avg_win_loss_ratio = avg_win
+else:
+    avg_win_loss_ratio = 0.0
 
 # ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
 from datetime import datetime, timedelta
@@ -950,6 +975,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
