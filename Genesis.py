@@ -264,53 +264,73 @@ else:
         st.session_state["last_selected_accounts"] 
 
 # ---------------- Prepare filtered trades safely ----------------
-# Initialize imports if not already
+# -------------------- Initialize Imports and Trades --------------------
+
+# Ensure imports dict exists
 if "imports" not in st.session_state:
     st.session_state["imports"] = {}
 
-# Ensure last_added exists
-st.session_state["last_added"] = st.session_state.get("last_added", import_names[0])
+# Get all import names
+import_names = list(st.session_state["imports"].keys())
 
-# Sidebar multiselect
+# Ensure last_added exists safely
+if import_names:
+    st.session_state["last_added"] = st.session_state.get("last_added", import_names[0])
+else:
+    st.session_state["last_added"] = None
+
+# Sidebar multiselect for accounts
 selected_accounts = st.sidebar.multiselect(
     "Account(s)", import_names, default=st.session_state.get("last_selected_accounts", [])
 )
 st.session_state["last_selected_accounts"] = selected_accounts
 
-    combined_raw, combined_grouped = [], []
-    for name in selected_accounts:
-        entry = st.session_state["imports"].get(name, {"raw": pd.DataFrame(), "grouped": pd.DataFrame()})
-        df_raw = entry["raw"].copy() if entry["raw"] is not None else pd.DataFrame()
-        df_group = entry["grouped"].copy() if entry["grouped"] is not None else pd.DataFrame()
-        if not df_raw.empty:
-            df_raw["Account"] = name
-        if not df_group.empty:
-            df_group["Account"] = name
-        combined_raw.append(df_raw)
-        combined_grouped.append(df_group)
+# Combine raw and grouped data from selected imports
+combined_raw, combined_grouped = [], []
 
-    raw_df = pd.concat([d for d in combined_raw if not d.empty], ignore_index=True) if combined_raw else pd.DataFrame()
-    trades = pd.concat([g for g in combined_grouped if not g.empty], ignore_index=True) if combined_grouped else pd.DataFrame()
+for name in selected_accounts:
+    entry = st.session_state["imports"].get(name, {"raw": pd.DataFrame(), "grouped": pd.DataFrame()})
+    df_raw = entry.get("raw", pd.DataFrame()).copy()
+    df_group = entry.get("grouped", pd.DataFrame()).copy()
+    
+    if not df_raw.empty:
+        df_raw["Account"] = name
+    if not df_group.empty:
+        df_group["Account"] = name
 
-    # Ensure 'Date' exists
-    if trades.empty:
-        trades = pd.DataFrame(columns=["Ticket","Symbol","OpenTime","CloseTime","Profit","Date","ActionOpen"])
-    if "Date" not in trades.columns and "OpenTime" in trades.columns:
-        trades["Date"] = pd.to_datetime(trades["OpenTime"], errors="coerce").dt.normalize()
-    else:
-        trades["Date"] = pd.to_datetime(trades.get("Date"), errors="coerce")
+    combined_raw.append(df_raw)
+    combined_grouped.append(df_group)
 
-    # Filter trades safely
-    if not trades.empty:
-        symbols_all = sorted(trades["Symbol"].fillna("UNKNOWN").unique())
-        sel_syms = st.sidebar.multiselect("Symbols", symbols_all, default=symbols_all)
-        date_min = trades["Date"].min().date()
-        date_max = trades["Date"].max().date()
-        date_range = st.sidebar.date_input("Date range", value=(date_min, date_max))
-        start_dt, end_dt = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1]) + pd.Timedelta(hours=23, minutes=59)
-        filtered = trades[trades["Symbol"].isin(sel_syms) & trades["Date"].between(start_dt, end_dt)].copy()
-    else:
-        filtered = pd.DataFrame()
+# Merge into single DataFrames
+raw_df = pd.concat([d for d in combined_raw if not d.empty], ignore_index=True) if combined_raw else pd.DataFrame()
+trades = pd.concat([g for g in combined_grouped if not g.empty], ignore_index=True) if combined_grouped else pd.DataFrame()
+
+# Ensure 'Date' column exists in trades
+if trades.empty:
+    trades = pd.DataFrame(columns=["Ticket", "Symbol", "OpenTime", "CloseTime", "Profit", "Date", "ActionOpen"])
+
+if "Date" not in trades.columns and "OpenTime" in trades.columns:
+    trades["Date"] = pd.to_datetime(trades["OpenTime"], errors="coerce").dt.normalize()
+else:
+    trades["Date"] = pd.to_datetime(trades.get("Date"), errors="coerce")
+
+# Filter trades safely based on symbols and date range
+if not trades.empty:
+    symbols_all = sorted(trades["Symbol"].fillna("UNKNOWN").unique())
+    sel_syms = st.sidebar.multiselect("Symbols", symbols_all, default=symbols_all)
+
+    date_min = trades["Date"].min().date()
+    date_max = trades["Date"].max().date()
+    date_range = st.sidebar.date_input("Date range", value=(date_min, date_max))
+
+    start_dt = pd.to_datetime(date_range[0])
+    end_dt = pd.to_datetime(date_range[1]) + pd.Timedelta(hours=23, minutes=59)
+
+    filtered = trades[
+        trades["Symbol"].isin(sel_syms) & trades["Date"].between(start_dt, end_dt)
+    ].copy()
+else:
+    filtered = pd.DataFrame()
 
 # ---------------- Compute metrics ----------------
 total_trades = len(filtered)
@@ -930,6 +950,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
