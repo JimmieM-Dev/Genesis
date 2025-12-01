@@ -264,10 +264,18 @@ else:
         st.session_state["last_selected_accounts"] 
 
 # ---------------- Prepare filtered trades safely ----------------
+# Initialize imports if not already
 if "imports" not in st.session_state:
-    st.session_state["imports"] = {}= [st.session_state.get("last_added", import_names[0])]
-    selected_accounts = st.sidebar.multiselect("Account(s)", import_names, default=st.session_state["last_selected_accounts"])
-    st.session_state["last_selected_accounts"] = selected_accounts
+    st.session_state["imports"] = {}
+
+# Ensure last_added exists
+st.session_state["last_added"] = st.session_state.get("last_added", import_names[0])
+
+# Sidebar multiselect
+selected_accounts = st.sidebar.multiselect(
+    "Account(s)", import_names, default=st.session_state.get("last_selected_accounts", [])
+)
+st.session_state["last_selected_accounts"] = selected_accounts
 
     combined_raw, combined_grouped = [], []
     for name in selected_accounts:
@@ -922,5 +930,6 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
