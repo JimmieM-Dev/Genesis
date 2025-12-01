@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-import MetaTrader5 as mt5  # optional; used if you connect MT5
 from datetime import datetime, date, timedelta
 
 # ---------------- Page config ----------------
@@ -923,4 +922,5 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
