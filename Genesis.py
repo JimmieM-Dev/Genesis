@@ -253,84 +253,6 @@ if st.session_state.get("sidebar_manual_open", False):
                 except Exception as e:
                     st.sidebar.error(f"Failed {f.name}: {e}")
 
-# ---------------- Automatic MT5 Imports ----------------
-if st.session_state.get("sidebar_auto_open", False):
-    st.sidebar.markdown("<div class='small-muted-2'>Automatic — connect to MT5</div>", unsafe_allow_html=True)
-    login = st.text_input("Login", key="mt5_login")
-    password = st.text_input("Password", type="password", key="mt5_password")
-    server = st.text_input("Server", key="mt5_server")
-    acct_label = st.text_input("Account label (optional)", key="mt5_label")
-
-    if "mt5_accounts" not in st.session_state:
-        st.session_state["mt5_accounts"] = []
-
-    from datetime import datetime as _dt, timedelta as _td
-
-    def connect_and_fetch_mt5(login, password, server, label=None):
-        """Connects to MT5, fetches trade history, stores in session_state."""
-        try:
-            if not mt5.initialize():
-                return False, f"MT5 initialize() failed: {mt5.last_error()}"
-            if not mt5.login(int(login), password=password, server=server):
-                mt5.shutdown()
-                return False, f"MT5 login failed: {mt5.last_error()}"
-            end_time = _dt.utcnow()
-            start_time = end_time - _td(days=365)
-            trades = mt5.history_deals_get(start_time, end_time)
-            if not trades:
-                df = pd.DataFrame()
-                grouped = pd.DataFrame()
-            else:
-                df = pd.DataFrame([t._asdict() for t in trades])
-                df, grouped = process_mt5_df(df)
-
-            key = label.strip() if label else f"MT5-{login}"
-            base, i = key, 1
-            if "imports" not in st.session_state:
-                st.session_state["imports"] = {}
-            while key in st.session_state["imports"]:
-                key = f"{base} ({i})"
-                i += 1
-            st.session_state["imports"][key] = {"raw": df, "grouped": grouped}
-            st.session_state["last_added"] = key
-            st.session_state["last_import_ts"] = datetime.utcnow()
-            if not any(acct.get("login")==login and acct.get("server")==server for acct in st.session_state["mt5_accounts"]):
-                st.session_state["mt5_accounts"].append({"login": login, "server": server, "label": key})
-            mt5.shutdown()
-            return True, f"Imported MT5 account {key}"
-        except Exception as e:
-            try:
-                mt5.shutdown()
-            except Exception:
-                pass
-            return False, str(e)
-
-    if st.sidebar.button("Connect & Fetch MT5"):
-        if not (login and password and server):
-            st.sidebar.error("Fill all MT5 fields")
-        else:
-            success, msg = connect_and_fetch_mt5(login, password, server, acct_label)
-            if success:
-                st.sidebar.success(msg)
-            else:
-                st.sidebar.error(msg)
-
-    # list previously connected accounts
-    if st.session_state["mt5_accounts"]:
-        st.sidebar.markdown("<hr>", unsafe_allow_html=True)
-        for i, acct in enumerate(st.session_state["mt5_accounts"]):
-            cols = st.sidebar.columns([3,1])
-            cols[0].markdown(f"**{acct['label']}**")
-            if cols[1].button("Sync now", key=f"sync_{i}"):
-                success, msg = connect_and_fetch_mt5(acct["login"], password="", server=acct["server"], label=acct["label"])
-                if success:
-                    st.sidebar.success(f"Synced {acct['label']}")
-                else:
-                    st.sidebar.error(f"Failed syncing {acct['label']}: {msg}")
-
-# ---------------- Prepare filtered trades safely ----------------
-if "imports" not in st.session_state:
-    st.session_state["imports"] = {}
 
 import_names = list(st.session_state["imports"].keys())
 if not import_names:
@@ -340,7 +262,11 @@ if not import_names:
     filtered = trades.copy()
 else:
     if not st.session_state.get("last_selected_accounts"):
-        st.session_state["last_selected_accounts"] = [st.session_state.get("last_added", import_names[0])]
+        st.session_state["last_selected_accounts"] 
+
+# ---------------- Prepare filtered trades safely ----------------
+if "imports" not in st.session_state:
+    st.session_state["imports"] = {}= [st.session_state.get("last_added", import_names[0])]
     selected_accounts = st.sidebar.multiselect("Account(s)", import_names, default=st.session_state["last_selected_accounts"])
     st.session_state["last_selected_accounts"] = selected_accounts
 
@@ -997,3 +923,4 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
