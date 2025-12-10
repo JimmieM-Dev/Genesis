@@ -1,5 +1,5 @@
 # tradezella_clone_singlefile_final.py
-# Single-file Streamlit app — regenerated with requested additions
+# Single-file Streamlit app — regenerated with universal importer/normalizer
 import io
 import math
 import numpy as np
@@ -60,7 +60,7 @@ def parse_time(x):
         return pd.NaT
     if isinstance(x, (pd.Timestamp, datetime)):
         return pd.to_datetime(x)
-    for fmt in ("%Y-%m-%d %H:%M:%S","%Y.%m.%d %H:%M","%d.%m.%Y %H:%M:%S","%Y-%m-%dT%H:%M:%S","%Y-%m-%d"):
+    for fmt in ("%Y-%m-%d %H:%M:%S","%Y.%m.%d %H:%M","%d.%m.%Y %H:%M:%S","%Y-%m-%dT%H:%M:%S","%Y-%m-%d","%m/%d/%Y %H:%M:%S","%m/%d/%Y"):
         try:
             return pd.to_datetime(x, format=fmt)
         except Exception:
@@ -71,40 +71,123 @@ def parse_time(x):
         return pd.NaT
 
 def process_mt5_df(df: pd.DataFrame):
+    """
+    Robust processing for many broker CSV/XLSX formats.
+
+    - Maps common alternative column names to the expected internal names.
+    - Parses times, numeric columns.
+    - Groups rows by Ticket/Position ID, computing EntryPrice/ExitPrice, Swap, Profit, etc.
+    - If Profit is missing but EntryPrice & ExitPrice exist, computes a fallback Profit=(ExitPrice-EntryPrice)*Lots.
+    """
     df = df.copy()
     df = df.rename(columns=lambda c: str(c).strip())
-    for c in ["Ticket","Symbol","Time","Action","Lots","Price","Swap","Profit"]:
+
+    # Common aliases for the fields we need
+    aliases = {
+        "Ticket": ["ticket", "position id", "positionid", "posid", "order", "order id", "orderid", "id"],
+        "Symbol": ["symbol", "instrument", "ticker", "pair"],
+        "Time": ["time", "open time", "opentime", "open_date", "open date", "date", "created at", "close date", "close_date", "close time"],
+        "Action": ["action", "type", "side"],
+        "Lots": ["lots", "volume", "size", "qty", "quantity"],
+        "Price": ["price", "open price", "openprice", "entryprice", "entry price"],
+        "ExitPrice": ["close price", "closeprice", "current price", "currentprice", "exitprice", "close", "close_price"],
+        "Swap": ["swap", "commission", "commissions"],
+        "Profit": ["profit", "pnl", "pl", "profit/loss", "profit (usd)", "net", "net profit"]
+    }
+
+    # create reverse lookup mapping existing col -> normalized name
+    col_map = {}
+    existing_cols = [c for c in df.columns]
+    for target, keys in aliases.items():
+        for k in keys:
+            for c in existing_cols:
+                if c.lower() == k.lower():
+                    col_map[c] = target
+                    break
+            if any(v == target for v in col_map.values()):
+                break
+
+    # Apply mapping to create normalized column names
+    df = df.rename(columns=lambda c: col_map.get(c, c))
+
+    # Ensure required columns exist
+    for c in ["Ticket", "Symbol", "Time", "Action", "Lots", "Price", "ExitPrice", "Swap", "Profit"]:
         if c not in df.columns:
             df[c] = np.nan
-    df["Time"] = df["Time"].apply(parse_time)
-    df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
-    for c in ["Profit","Lots","Price","Swap"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    # Parse times
+    if "Time" in df.columns:
+        df["Time"] = df["Time"].apply(parse_time)
+        df["Time"] = pd.to_datetime(df["Time"], errors="coerce")
+    else:
+        df["Time"] = pd.NaT
+
+    # Numeric conversion
+    for c in ["Profit", "Lots", "Price", "Swap", "ExitPrice"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Normalize action strings
+    df["Action"] = df["Action"].astype(str).str.strip().str.upper().replace({"B":"BUY","S":"SELL","LONG":"BUY","SHORT":"SELL"})
+
+    # Fill Ticket if missing
     if df["Ticket"].isna().any():
         mask = df["Ticket"].isna()
         start = int(1_000_000)
-        df.loc[mask,"Ticket"] = np.arange(start, start + mask.sum())
+        df.loc[mask, "Ticket"] = np.arange(start, start + mask.sum())
+
+    # Group rows by Ticket (handles both single-row-per-trade and multi-row open/close exports)
     grouped = df.sort_values("Time").groupby("Ticket", as_index=False).agg(
-        Symbol=("Symbol","first"),
-        OpenTime=("Time","first"),
-        CloseTime=("Time","last"),
-        ActionOpen=("Action","first"),
-        Lots=("Lots","first"),
-        EntryPrice=("Price","first"),
-        ExitPrice=("Price","last"),
-        Swap=("Swap","sum"),
-        Profit=("Profit","sum")
+        Symbol = ("Symbol", lambda s: s.dropna().astype(str).iloc[0] if len(s.dropna())>0 else "UNKNOWN"),
+        OpenTime = ("Time", "first"),
+        CloseTime = ("Time", "last"),
+        ActionOpen = ("Action", "first"),
+        Lots = ("Lots", "first"),
+        EntryPrice = ("Price", "first"),
+        ExitPrice = ("ExitPrice", "last"),
+        Swap = ("Swap", "sum"),
+        Profit = ("Profit", "sum")
     )
+
+    # If ExitPrice missing, try to use last Price per ticket
+    if grouped["ExitPrice"].isnull().all():
+        last_price = df.sort_values(["Ticket","Time"]).groupby("Ticket", as_index=True).tail(1)[["Ticket","Price"]].set_index("Ticket")
+        grouped = grouped.set_index("Ticket")
+        if "Price" in last_price.columns:
+            grouped["ExitPrice"] = grouped["ExitPrice"].fillna(last_price["Price"])
+        grouped = grouped.reset_index()
+
+    # Fill OpenTime / CloseTime safely
     grouped["OpenTime"].fillna(pd.Timestamp.now(), inplace=True)
     grouped["CloseTime"].fillna(grouped["OpenTime"], inplace=True)
-    grouped["Date"] = grouped["OpenTime"].dt.normalize()
+
+    # Fallback Profit calculation where Profit is missing or zero
+    def compute_fallback_profit(row):
+        p = row.get("Profit")
+        if pd.notna(p) and not math.isnan(p) and float(p) != 0.0:
+            return float(p)
+        ep = row.get("EntryPrice")
+        xp = row.get("ExitPrice")
+        lots = row.get("Lots") if not pd.isna(row.get("Lots")) else 0.0
+        try:
+            if pd.notna(ep) and pd.notna(xp) and pd.notna(lots):
+                return float((xp - ep) * lots)
+        except Exception:
+            pass
+        return 0.0
+
+    grouped["Profit"] = grouped.apply(compute_fallback_profit, axis=1)
+
+    # Derived analytics fields
+    grouped["Date"] = pd.to_datetime(grouped["OpenTime"], errors="coerce").dt.normalize()
     grouped["Win"] = grouped["Profit"] > 0
     grouped["Loss"] = grouped["Profit"] < 0
     grouped["BreakEven"] = grouped["Profit"] == 0
     grouped["CumProfit"] = grouped["Profit"].cumsum()
+
     if "ActionOpen" in grouped.columns:
         grouped["ActionOpen"] = grouped["ActionOpen"].astype(str).str.upper().replace({"BUY":"BUY","SELL":"SELL"})
-    return df, grouped
+
+    return df, grouped.reset_index(drop=True)
 
 def make_demo_data(n=240):
     rng = pd.date_range(end=pd.Timestamp.now(), periods=n, freq='12h')
@@ -225,8 +308,8 @@ with st.sidebar:
 
 # ---------------- Manual Imports ----------------
 if st.session_state.get("sidebar_manual_open", False):
-    st.sidebar.markdown("<div class='small-muted-2'>Manual — upload MT5 CSV/XLSX</div>", unsafe_allow_html=True)
-    uploaded_files = st.sidebar.file_uploader("Upload MT5 file(s)", accept_multiple_files=True, key="sidebar_upload")
+    st.sidebar.markdown("<div class='small-muted-2'>Manual — upload MT5 CSV/XLSX or other broker CSVs</div>", unsafe_allow_html=True)
+    uploaded_files = st.sidebar.file_uploader("Upload file(s)", accept_multiple_files=True, key="sidebar_upload")
     account_name = st.sidebar.text_input("Account name (optional)", key="sidebar_account_name")
     if st.sidebar.button("Add upload(s)"):
         if not uploaded_files:
@@ -236,16 +319,19 @@ if st.session_state.get("sidebar_manual_open", False):
                 st.session_state["imports"] = {}
             for f in uploaded_files:
                 try:
+                    # read raw file
                     if f.name.lower().endswith((".csv", ".txt")):
-                        df = pd.read_csv(f)
+                        raw_df = pd.read_csv(f)
                     else:
-                        df = pd.read_excel(f, engine="openpyxl")
-                    df, grouped = process_mt5_df(df)
+                        raw_df = pd.read_excel(f, engine="openpyxl")
+
+                    # Universal normalization: use process_mt5_df which is robust to many formats
+                    raw_norm, grouped = process_mt5_df(raw_df)
                     key = account_name.strip() or f.name
                     base, i = key, 1
                     while key in st.session_state["imports"]:
                         key = f"{base} ({i})"; i += 1
-                    st.session_state["imports"][key] = {"raw": df, "grouped": grouped}
+                    st.session_state["imports"][key] = {"raw": raw_norm, "grouped": grouped}
                     st.session_state["last_added"] = key
                     st.session_state["last_import_ts"] = datetime.utcnow()
                     st.sidebar.success(f"Added {key}")
@@ -388,7 +474,7 @@ win_rate = (wins / total_trades * 100) if total_trades else 0.0
 avg_win_loss_ratio = (avg_win/avg_loss) if avg_loss>0 else (avg_win if avg_win>0 else 0.0)
 
 # ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
-from datetime import datetime, timedelta
+from datetime import datetime as _dt, timedelta as _td
 
 # Nairobi is UTC+3 (EAT)
 now_utc = datetime.utcnow()
@@ -452,12 +538,12 @@ if st.session_state.get("show_top_uploader", False):
                         raw = pd.read_csv(f)
                     else:
                         raw = pd.read_excel(f, engine="openpyxl")
-                    raw, grouped = process_mt5_df(raw)
+                    raw_norm, grouped = process_mt5_df(raw)
                     key = top_name.strip() or f.name
                     base, i = key, 1
                     while key in st.session_state["imports"]:
                         key = f"{base} ({i})"; i += 1
-                    st.session_state["imports"][key] = {"raw": raw, "grouped": grouped}
+                    st.session_state["imports"][key] = {"raw": raw_norm, "grouped": grouped}
                     added.append(key)
                 except Exception as e:
                     st.error(f"Failed {f.name}: {e}")
@@ -713,20 +799,28 @@ with right_bot:
     st.markdown(cal_html, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------------- Asset Performance & Insights (new section) ----------------
+# ---------------- Asset Performance & Insights (robust) ----------------
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 st.markdown("<div class='card'>", unsafe_allow_html=True)
-st.markdown("<div style='display:flex;justify-content:space-between;align-items:center'><strong>Asset Performance & Trade Insights</strong><div class='small-muted'>Pie, long/short, duration + recommendations</div></div>", unsafe_allow_html=True)
+st.markdown(
+    "<div style='display:flex;justify-content:space-between;align-items:center'>"
+    "<strong>Asset Performance & Trade Insights</strong>"
+    "<div class='small-muted'>Pie, long/short, duration + recommendations</div></div>",
+    unsafe_allow_html=True
+)
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
 if len(filtered) > 0:
     try:
-        # Ensure ActionOpen exists and normalized
+        # Normalize ActionOpen column
         if "ActionOpen" not in filtered.columns:
             filtered["ActionOpen"] = filtered.get("Action", "").astype(str).str.upper()
 
-        # Left: Pie chart - asset name vs total trades
-        col_a, col_b, col_c = st.columns([1.2,1,1])
+        # Strip spaces from all columns
+        filtered.columns = filtered.columns.str.strip()
+
+        # ---------------- Left: Trades per Asset ----------------
+        col_a, col_b, col_c = st.columns([1.2, 1, 1])
         with col_a:
             st.markdown("<div style='font-weight:700;margin-bottom:6px'>Trades per Asset</div>", unsafe_allow_html=True)
             cnts = filtered.groupby("Symbol")["Ticket"].nunique().sort_values(ascending=False)
@@ -736,10 +830,10 @@ if len(filtered) > 0:
                 labels = cnts.index.tolist()
                 values = cnts.values.tolist()
                 fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4, sort=False)])
-                fig_pie.update_layout(showlegend=True, margin=dict(t=10,b=10,l=10,r=10), paper_bgcolor='rgba(0,0,0,0)')
+                fig_pie.update_layout(showlegend=True, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-        # Middle: Long vs Short counts and performance
+        # ---------------- Middle: Long vs Short ----------------
         with col_b:
             st.markdown("<div style='font-weight:700;margin-bottom:6px'>Long vs Short</div>", unsafe_allow_html=True)
             actions = filtered["ActionOpen"].fillna("UNKNOWN").str.upper()
@@ -747,34 +841,98 @@ if len(filtered) > 0:
             short_mask = actions.str.contains("SELL")
             long_cnt = int(long_mask.sum())
             short_cnt = int(short_mask.sum())
-            long_profit = filtered.loc[long_mask, "Profit"].sum() if long_cnt>0 else 0.0
-            short_profit = filtered.loc[short_mask, "Profit"].sum() if short_cnt>0 else 0.0
-            avg_long = filtered.loc[long_mask, "Profit"].mean() if long_cnt>0 else 0.0
-            avg_short = filtered.loc[short_mask, "Profit"].mean() if short_cnt>0 else 0.0
-
+            avg_long = filtered.loc[long_mask, "Profit"].mean() if long_cnt > 0 else 0.0
+            avg_short = filtered.loc[short_mask, "Profit"].mean() if short_cnt > 0 else 0.0
             better_side = "Long" if avg_long > avg_short else ("Short" if avg_short > avg_long else "Tie")
-            st.markdown(f"<div class='insight-card'><div style='font-weight:700'>Counts</div><div style='display:flex;justify-content:space-between;margin-top:6px'><div>Long: <strong>{long_cnt}</strong></div><div>Short: <strong>{short_cnt}</strong></div></div><div style='height:8px'></div><div style='font-weight:700'>Average P&L</div><div style='display:flex;justify-content:space-between;margin-top:6px'><div style='color:#26a269'>Long: <strong>${avg_long:,.2f}</strong></div><div style='color:#ff5b5b'>Short: <strong>${avg_short:,.2f}</strong></div></div><div style='margin-top:8px;font-weight:700'>Better: <span style=\"color:#fff\">{better_side}</span></div></div>", unsafe_allow_html=True)
 
-        # Right: Average trade duration
+            st.markdown(
+                f"<div class='insight-card'>"
+                f"<div style='font-weight:700'>Counts</div>"
+                f"<div style='display:flex;justify-content:space-between;margin-top:6px'>"
+                f"<div>Long: <strong>{long_cnt}</strong></div>"
+                f"<div>Short: <strong>{short_cnt}</strong></div></div>"
+                f"<div style='height:8px'></div>"
+                f"<div style='font-weight:700'>Average P&L</div>"
+                f"<div style='display:flex;justify-content:space-between;margin-top:6px'>"
+                f"<div style='color:#26a269'>Long: <strong>${avg_long:,.2f}</strong></div>"
+                f"<div style='color:#ff5b5b'>Short: <strong>${avg_short:,.2f}</strong></div></div>"
+                f"<div style='margin-top:8px;font-weight:700'>Better: <span style='color:#fff'>{better_side}</span></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+        # ---------------- Right: Average Trade Duration ----------------
         with col_c:
             st.markdown("<div style='font-weight:700;margin-bottom:6px'>Average Trade Duration</div>", unsafe_allow_html=True)
-            # compute Duration in hours
             try:
-                ot = pd.to_datetime(filtered["OpenTime"], errors="coerce")
-                ct = pd.to_datetime(filtered["CloseTime"], errors="coerce")
-                durations = (ct - ot).dt.total_seconds() / 3600.0
-                durations = durations.replace([np.inf, -np.inf], np.nan).dropna()
-                avg_dur = durations.mean() if len(durations)>0 else 0.0
-                med_dur = durations.median() if len(durations)>0 else 0.0
-                st.markdown(f"<div class='insight-card'><div>Average: <strong>{avg_dur:.2f} hrs</strong></div><div>Median: <strong>{med_dur:.2f} hrs</strong></div><div style='height:8px'></div>", unsafe_allow_html=True)
+                import re
+                durations = []
+
+                # Detect relevant columns
+                open_cols = ["OpenTime", "Open Date", "Open"]
+                close_cols = ["CloseTime", "Close Date", "Close"]
+                single_cols = ["Time", "Timestamp"]
+
+                open_col = next((c for c in open_cols if c in filtered.columns), None)
+                close_col = next((c for c in close_cols if c in filtered.columns), None)
+                single_col = next((c for c in single_cols if c in filtered.columns), None)
+
+                for _, row in filtered.iterrows():
+                    # Case 1: Duration column exists
+                    if "Duration" in filtered.columns and isinstance(row.get("Duration"), str) and row["Duration"].strip() != "":
+                        dur_str = row["Duration"]
+                        hours = int(re.search(r'(\d+)\s*h', dur_str).group(1)) if re.search(r'(\d+)\s*h', dur_str) else 0
+                        minutes = int(re.search(r'(\d+)\s*m', dur_str).group(1)) if re.search(r'(\d+)\s*m', dur_str) else 0
+                        seconds = int(re.search(r'(\d+)\s*s', dur_str).group(1)) if re.search(r'(\d+)\s*s', dur_str) else 0
+                        durations.append(hours + minutes/60 + seconds/3600)
+
+                    # Case 2: Open/Close columns exist → compute duration
+                    elif open_col and close_col:
+                        try:
+                            ot = pd.to_datetime(row[open_col], errors="coerce")
+                            ct = pd.to_datetime(row[close_col], errors="coerce")
+                            if pd.notnull(ot) and pd.notnull(ct):
+                                delta_hours = (ct - ot).total_seconds() / 3600
+                                durations.append(delta_hours)
+                        except Exception:
+                            continue
+
+                    # Case 3: Single timestamp only → skip or append 0
+                    elif single_col:
+                        durations.append(np.nan)
+
+                # Convert to Series and remove invalid values
+                durations = pd.Series(durations).replace([np.inf, -np.inf], np.nan).dropna()
+
+                avg_dur = durations.mean() if len(durations) > 0 else 0.0
+                med_dur = durations.median() if len(durations) > 0 else 0.0
+
+                st.markdown(
+                    f"<div class='insight-card'>"
+                    f"<div>Average: <strong>{avg_dur:.2f} hrs</strong></div>"
+                    f"<div>Median: <strong>{med_dur:.2f} hrs</strong></div>"
+                    f"<div style='height:8px'></div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                # Histogram
                 if len(durations) > 0:
                     fig_h = go.Figure()
                     fig_h.add_trace(go.Histogram(x=durations, nbinsx=20))
-                    fig_h.update_layout(height=160, margin=dict(t=10,b=10,l=10,r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    fig_h.update_layout(
+                        height=160,
+                        margin=dict(t=10, b=10, l=10, r=10),
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)'
+                    )
                     st.plotly_chart(fig_h, use_container_width=True)
-                st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No duration data to display.")
+
             except Exception as e:
-                st.info("Duration data unavailable.")
+                st.info(f"Duration data unavailable: {e}")
+
     except Exception as e:
         st.error(f"Failed computing asset insights: {e}")
 
@@ -838,118 +996,121 @@ if len(filtered) > 0:
     except Exception as e:
         st.info("Not enough data to compute session recommendations.")
 
-   # ---------------- NEW ROW: Other Sessions, Worst/Best Days, Worst/Best Trade Times ----------------
-st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-o1, o2, o3, t1, t2 = st.columns([1,1,1,1,1])  # added t1 and t2 for trade times
+    # ---------------- NEW ROW: Other Sessions, Worst/Best Days, Worst/Best Trade Times ----------------
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    o1, o2, o3, t1, t2 = st.columns([1,1,1,1,1])  # added t1 and t2 for trade times
 
-try:
-    # Ensure Date and Profit exist
-    filtered["Date"] = pd.to_datetime(filtered["Date"], errors="coerce")
-    filtered = filtered.dropna(subset=["Date", "Profit"])
+    try:
+        # Ensure Date and Profit exist
+        filtered["Date"] = pd.to_datetime(filtered["Date"], errors="coerce")
+        filtered = filtered.dropna(subset=["Date", "Profit"])
 
-    # Add weekday name
-    filtered["weekday"] = filtered["Date"].dt.day_name()
+        # Add weekday name
+        filtered["weekday"] = filtered["Date"].dt.day_name()
 
-    # -------------------- Other Sessions --------------------
-    with o1:
-        st.markdown("<div style='font-weight:700;margin-bottom:6px'>Other Sessions Traded & Performance</div>", unsafe_allow_html=True)
-        if len(session_counts) == 0:
-            st.info("No session data.")
+        # -------------------- Other Sessions --------------------
+        with o1:
+            st.markdown("<div style='font-weight:700;margin-bottom:6px'>Other Sessions Traded & Performance</div>", unsafe_allow_html=True)
+            if 'session_counts' not in locals() or len(session_counts) == 0:
+                st.info("No session data.")
+            else:
+                html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
+                html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Session</th><th style='color:#94a3b8; padding-bottom:6px;'>Trades</th><th style='color:#94a3b8; padding-bottom:6px;'>Avg P&L</th></tr>"
+                for s in session_counts.index:
+                    trades_cnt = int(session_counts.loc[s])
+                    avg_p = session_perf.loc[s] if s in session_perf.index else 0.0
+                    color = "#26a269" if avg_p >= 0 else "#ff5b5b"
+                    html += f"<tr><td>{s}</td><td>{trades_cnt}</td><td style='color:{color}'>${avg_p:,.2f}</td></tr>"
+                html += "</table></div>"
+                st.markdown(html, unsafe_allow_html=True)
+
+        # -------------------- Worst Performing Weekdays --------------------
+        with o2:
+            st.markdown("<div style='font-weight:700;margin-bottom:6px'>Worst Performing Days</div>", unsafe_allow_html=True)
+            if filtered.empty:
+                st.info("No trade data available.")
+            else:
+                weekday_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+                weekday_stats = filtered.groupby("weekday")["Profit"].sum().reindex(weekday_order).dropna()
+                min_pnl = weekday_stats.min()
+                worst_days = weekday_stats[weekday_stats == min_pnl]
+
+                html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
+                html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Day</th><th style='color:#94a3b8; padding-bottom:6px;'>Total P&L</th></tr>"
+                for day, pnl in worst_days.items():
+                    color = "#ff5b5b" if pnl < 0 else "#26a269"
+                    html += f"<tr><td>{day}</td><td style='color:{color}'>${pnl:,.2f}</td></tr>"
+                html += "</table></div>"
+                st.markdown(html, unsafe_allow_html=True)
+
+        # -------------------- Best Performing Weekdays --------------------
+        with o3:
+            st.markdown("<div style='font-weight:700;margin-bottom:6px'>Best Performing Days</div>", unsafe_allow_html=True)
+            if filtered.empty:
+                st.info("No trade data available.")
+            else:
+                max_pnl = weekday_stats.max()
+                best_days = weekday_stats[weekday_stats == max_pnl]
+
+                html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
+                html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Day</th><th style='color:#94a3b8; padding-bottom:6px;'>Total P&L</th></tr>"
+                for day, pnl in best_days.items():
+                    color = "#26a269" if pnl >= 0 else "#ff5b5b"
+                    html += f"<tr><td>{day}</td><td style='color:{color}'>${pnl:,.2f}</td></tr>"
+                html += "</table></div>"
+                st.markdown(html, unsafe_allow_html=True)
+
+        # -------------------- Worst/Best Trade Time Windows --------------------
+        filtered["OpenTime"] = pd.to_datetime(filtered["OpenTime"], errors="coerce")
+        filtered = filtered.dropna(subset=["OpenTime"])
+
+        # Convert OpenTime to EAT
+        filtered["OpenTime_eat"] = filtered["OpenTime"] + pd.Timedelta(hours=3)
+
+        # Create 30-min bins
+        def time_bin(dt):
+            m_bin = 0 if dt.minute < 30 else 30
+            start = dt.replace(minute=m_bin, second=0, microsecond=0)
+            end = start + pd.Timedelta(minutes=30)
+            return f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+
+        filtered["TimeWindow"] = filtered["OpenTime_eat"].apply(time_bin)
+        time_stats = filtered.groupby("TimeWindow")["Profit"].sum()
+
+        if not time_stats.empty:
+            worst_time_window = time_stats.idxmin()
+            worst_pnl = time_stats.min()
+            best_time_window = time_stats.idxmax()
+            best_pnl = time_stats.max()
         else:
-            html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
-            html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Session</th><th style='color:#94a3b8; padding-bottom:6px;'>Trades</th><th style='color:#94a3b8; padding-bottom:6px;'>Avg P&L</th></tr>"
-            for s in session_counts.index:
-                trades_cnt = int(session_counts.loc[s])
-                avg_p = session_perf.loc[s] if s in session_perf.index else 0.0
-                color = "#26a269" if avg_p >= 0 else "#ff5b5b"
-                html += f"<tr><td>{s}</td><td>{trades_cnt}</td><td style='color:{color}'>${avg_p:,.2f}</td></tr>"
-            html += "</table></div>"
-            st.markdown(html, unsafe_allow_html=True)
+            worst_time_window = best_time_window = None
+            worst_pnl = best_pnl = 0
 
-    # -------------------- Worst Performing Weekdays --------------------
-    with o2:
-        st.markdown("<div style='font-weight:700;margin-bottom:6px'>Worst Performing Days</div>", unsafe_allow_html=True)
-        if filtered.empty:
-            st.info("No trade data available.")
-        else:
-            weekday_order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-            weekday_stats = filtered.groupby("weekday")["Profit"].sum().reindex(weekday_order).dropna()
-            min_pnl = weekday_stats.min()
-            worst_days = weekday_stats[weekday_stats == min_pnl]
+        # -------------------- LEFT: Worst Trade Time Window --------------------
+        with t1:
+            st.markdown("<div style='font-weight:700;margin-bottom:6px'>Worst Trade Time Window</div>", unsafe_allow_html=True)
+            if worst_time_window:
+                color = "#ff5b5b" if worst_pnl < 0 else "#26a269"
+                html = f"<div class='insight-card' style='text-align:center'><strong>{worst_time_window}</strong><br>Total P&L: <span style='color:{color}'>${worst_pnl:,.2f}</span></div>"
+                st.markdown(html, unsafe_allow_html=True)
+            else:
+                st.info("No trade time data.")
 
-            html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
-            html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Day</th><th style='color:#94a3b8; padding-bottom:6px;'>Total P&L</th></tr>"
-            for day, pnl in worst_days.items():
-                color = "#ff5b5b" if pnl < 0 else "#26a269"
-                html += f"<tr><td>{day}</td><td style='color:{color}'>${pnl:,.2f}</td></tr>"
-            html += "</table></div>"
-            st.markdown(html, unsafe_allow_html=True)
+        # -------------------- RIGHT: Best Trade Time Window --------------------
+        with t2:
+            st.markdown("<div style='font-weight:700;margin-bottom:6px'>Best Trade Time Window</div>", unsafe_allow_html=True)
+            if best_time_window:
+                color = "#26a269" if best_pnl >= 0 else "#ff5b5b"
+                html = f"<div class='insight-card' style='text-align:center'><strong>{best_time_window}</strong><br>Total P&L: <span style='color:{color}'>${best_pnl:,.2f}</span></div>"
+                st.markdown(html, unsafe_allow_html=True)
+            else:
+                st.info("No trade time data.")
 
-    # -------------------- Best Performing Weekdays --------------------
-    with o3:
-        st.markdown("<div style='font-weight:700;margin-bottom:6px'>Best Performing Days</div>", unsafe_allow_html=True)
-        if filtered.empty:
-            st.info("No trade data available.")
-        else:
-            max_pnl = weekday_stats.max()
-            best_days = weekday_stats[weekday_stats == max_pnl]
+    except Exception as e:
+        st.info("Not enough data to populate performance summaries.")
 
-            html = "<div class='insight-card'><table style='width:100%; font-size:13px; border-collapse:collapse; text-align:center;'>"
-            html += "<tr><th style='color:#94a3b8; padding-bottom:6px;'>Day</th><th style='color:#94a3b8; padding-bottom:6px;'>Total P&L</th></tr>"
-            for day, pnl in best_days.items():
-                color = "#26a269" if pnl >= 0 else "#ff5b5b"
-                html += f"<tr><td>{day}</td><td style='color:{color}'>${pnl:,.2f}</td></tr>"
-            html += "</table></div>"
-            st.markdown(html, unsafe_allow_html=True)
-
-    # -------------------- Worst/Best Trade Time Windows --------------------
-    filtered["OpenTime"] = pd.to_datetime(filtered["OpenTime"], errors="coerce")
-    filtered = filtered.dropna(subset=["OpenTime"])
-
-    # Convert OpenTime to EAT
-    filtered["OpenTime_eat"] = filtered["OpenTime"] + pd.Timedelta(hours=3)
-
-    # Create 30-min bins
-    def time_bin(dt):
-        m_bin = 0 if dt.minute < 30 else 30
-        start = dt.replace(minute=m_bin, second=0, microsecond=0)
-        end = start + pd.Timedelta(minutes=30)
-        return f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
-
-    filtered["TimeWindow"] = filtered["OpenTime_eat"].apply(time_bin)
-    time_stats = filtered.groupby("TimeWindow")["Profit"].sum()
-
-    if not time_stats.empty:
-        worst_time_window = time_stats.idxmin()
-        worst_pnl = time_stats.min()
-        best_time_window = time_stats.idxmax()
-        best_pnl = time_stats.max()
-    else:
-        worst_time_window = best_time_window = None
-        worst_pnl = best_pnl = 0
-
-    # -------------------- LEFT: Worst Trade Time Window --------------------
-    with t1:
-        st.markdown("<div style='font-weight:700;margin-bottom:6px'>Worst Trade Time Window</div>", unsafe_allow_html=True)
-        if worst_time_window:
-            color = "#ff5b5b" if worst_pnl < 0 else "#26a269"
-            html = f"<div class='insight-card' style='text-align:center'><strong>{worst_time_window}</strong><br>Total P&L: <span style='color:{color}'>${worst_pnl:,.2f}</span></div>"
-            st.markdown(html, unsafe_allow_html=True)
-        else:
-            st.info("No trade time data.")
-
-    # -------------------- RIGHT: Best Trade Time Window --------------------
-    with t2:
-        st.markdown("<div style='font-weight:700;margin-bottom:6px'>Best Trade Time Window</div>", unsafe_allow_html=True)
-        if best_time_window:
-            color = "#26a269" if best_pnl >= 0 else "#ff5b5b"
-            html = f"<div class='insight-card' style='text-align:center'><strong>{best_time_window}</strong><br>Total P&L: <span style='color:{color}'>${best_pnl:,.2f}</span></div>"
-            st.markdown(html, unsafe_allow_html=True)
-        else:
-            st.info("No trade time data.")
-
-except Exception as e:
-    st.info("Not enough data to populate performance summaries.")
+else:
+    st.info("No trades to compute insights.")
 
 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -965,7 +1126,7 @@ if len(filtered) > 0:
         running_max = equity.cummax()
         drawdown = running_max - equity
         max_dd = drawdown.max() if len(drawdown)>0 else 0.0
-        max_dd_pct = (max_dd / running_max.max() * 100) if running_max.max() != 0 else 0.0
+        max_dd_pct = (max_dd / running_max.max() * 100) if (running_max.max() if len(running_max)>0 else 0) != 0 else 0.0
         daily_profit = filtered.groupby(filtered["Date"].dt.date)["Profit"].sum()
         if len(daily_profit) > 1:
             sharpe = (daily_profit.mean() / (daily_profit.std() if daily_profit.std()!=0 else 1)) * np.sqrt(252)
@@ -975,7 +1136,7 @@ if len(filtered) > 0:
         col1.metric("Max Drawdown ($)", f"${max_dd:,.2f}")
         col2.metric("Max Drawdown (%)", f"{max_dd_pct:.2f}%")
         col3.metric("Sharpe Ratio", f"{sharpe:.2f}")
-        col4.metric("Avg Win / Avg Loss", f"${avg_win:,.2f} / ${avg_loss:.2f}")
+        col4.metric("Avg Win / Avg Loss", f"${avg_win:.2f} / ${avg_loss:.2f}")
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         symbols_ordered = filtered.groupby("Symbol")["Profit"].sum().sort_values(ascending=False).index.tolist()[:6]
         for sym in symbols_ordered:
@@ -996,4 +1157,3 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
-
