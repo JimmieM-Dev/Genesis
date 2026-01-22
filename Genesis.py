@@ -636,62 +636,167 @@ col_left, col_mid, col_right = st.columns([1.4, 2.4, 1.4])
 with col_left:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<div style='font-weight:700'>Zella Score <span style='color:#94a3b8;font-weight:400;font-size:12px'>Beta</span></div>", unsafe_allow_html=True)
+
     z_win = win_rate / 100.0
-    z_pf = 0.0 if math.isinf(pf) else min((pf / 3.0) if pf!=0 else 0.0, 1.0)
-    z_awl = min((avg_win_loss_ratio / 3.0) if avg_win_loss_ratio>0 else 0.0, 1.0)
+    z_pf = 0.0 if math.isinf(pf) else min((pf / 3.0) if pf != 0 else 0.0, 1.0)
+    z_awl = min((avg_win_loss_ratio / 3.0) if avg_win_loss_ratio > 0 else 0.0, 1.0)
     z_score = 100 * (0.4 * z_win + 0.3 * z_awl + 0.3 * z_pf)
-    st.markdown(f"<div style='margin-top:8px;font-size:20px;font-weight:800;color:#26a269'>Your Zella Score: {z_score:.1f}</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        f"<div style='margin-top:8px;font-size:20px;font-weight:800;color:#26a269'>Your Zella Score: {z_score:.1f}</div>",
+        unsafe_allow_html=True
+    )
+
     try:
-        categories = ["Win %","Avg win/loss","Profit factor"]
-        vals = [z_win*100, z_awl*100, z_pf*100]
-        vals_plot = vals + [vals[0]]
-        cats_plot = categories + [categories[0]]
+        categories = ["Win %", "Avg win/loss", "Profit factor"]
+        vals = [z_win * 100, z_awl * 100, z_pf * 100]
         fig_r = go.Figure()
-        fig_r.add_trace(go.Scatterpolar(theta=cats_plot, r=vals_plot, fill='toself', line_color="#9CA3AF"))
-        fig_r.update_layout(paper_bgcolor='rgba(0,0,0,0)', polar=dict(bgcolor='rgba(0,0,0,0)', radialaxis=dict(visible=False)), height=260, margin=dict(t=10,b=4,l=4,r=4))
+        fig_r.add_trace(
+            go.Scatterpolar(
+                theta=categories + [categories[0]],
+                r=vals + [vals[0]],
+                fill="toself",
+                line_color="#9CA3AF"
+            )
+        )
+        fig_r.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            polar=dict(bgcolor="rgba(0,0,0,0)", radialaxis=dict(visible=False)),
+            height=260,
+            margin=dict(t=10, b=4, l=4, r=4),
+        )
         st.plotly_chart(fig_r, use_container_width=True)
     except Exception:
         st.info("Unable to render Zella triangle.")
+
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 with col_mid:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<strong>Daily Net Cumulative P&L</strong>", unsafe_allow_html=True)
     try:
         if len(filtered) > 0:
-            daily = filtered.groupby(filtered["Date"].dt.date).agg(DailyPnL=("Profit","sum")).sort_index()
+            daily = (
+                filtered
+                .groupby(filtered["Date"].dt.date)
+                .agg(DailyPnL=("Profit", "sum"))
+                .sort_index()
+            )
             daily["Cumulative"] = daily["DailyPnL"].cumsum()
+
             fig_area = go.Figure()
+
+            # ----- Positive cumulative (fade to zero) -----
             y_pos = [val if val > 0 else 0 for val in daily["Cumulative"]]
-            fig_area.add_trace(go.Scatter(x=daily.index, y=y_pos, fill='tozeroy', line=dict(color="#26a269"), mode='lines', showlegend=False))
+            fig_area.add_trace(
+                go.Scatter(
+                    x=daily.index,
+                    y=y_pos,
+                    mode="lines",
+                    line=dict(color="#26a269", width=2),
+                    fill="tozeroy",
+                    fillgradient=dict(
+                        type="vertical",
+                        colorscale=[
+                            [0.0, "rgba(38,162,105,0.0)"],
+                            [1.0, "rgba(38,162,105,0.45)"]
+                        ]
+                    ),
+                    showlegend=False
+                )
+            )
+
+            # ----- Negative cumulative (fade to zero) -----
             y_neg = [val if val < 0 else 0 for val in daily["Cumulative"]]
-            fig_area.add_trace(go.Scatter(x=daily.index, y=y_neg, fill='tozeroy', line=dict(color="#ff4c4c"), mode='lines', showlegend=False))
-            y_zero = [0 for _ in daily["Cumulative"]]
-            fig_area.add_trace(go.Scatter(x=daily.index, y=y_zero, line=dict(color="#0f1724", width=1), mode='lines', showlegend=False))
-            fig_area.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=260, margin=dict(t=10,b=10,l=10,r=10))
+            fig_area.add_trace(
+                go.Scatter(
+                    x=daily.index,
+                    y=y_neg,
+                    mode="lines",
+                    line=dict(color="#ff4c4c", width=2),
+                    fill="tozeroy",
+                    fillgradient=dict(
+                        type="vertical",
+                        colorscale=[
+                            [0.0, "rgba(255,76,76,0.45)"],
+                            [1.0, "rgba(255,76,76,0.0)"]
+                        ]
+                    ),
+                    showlegend=False
+                )
+            )
+
+            # ----- Zero line -----
+            fig_area.add_trace(
+                go.Scatter(
+                    x=daily.index,
+                    y=[0] * len(daily),
+                    mode="lines",
+                    line=dict(color="#0f1724", width=1),
+                    showlegend=False
+                )
+            )
+
+            fig_area.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=260,
+                margin=dict(t=10, b=10, l=10, r=10),
+                xaxis=dict(showgrid=False, color="#94a3b8"),
+                yaxis=dict(showgrid=False, color="#94a3b8"),
+            )
+
             st.plotly_chart(fig_area, use_container_width=True)
+
         else:
             st.info("No trades in range for cumulative P&L.")
     except Exception as e:
         st.error(f"Failed to draw cumulative P&L: {e}")
-    st.markdown("</div>", unsafe_allow_html=True)
 
+    st.markdown("</div>", unsafe_allow_html=True)
+    
 with col_right:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<strong>Net Daily P&L</strong>", unsafe_allow_html=True)
+
     try:
-        if len(filtered)>0:
-            daily_local = filtered.groupby(filtered["Date"].dt.date).agg(DailyPnL=("Profit","sum")).sort_index()
+        if len(filtered) > 0:
+            daily_local = (
+                filtered
+                .groupby(filtered["Date"].dt.date)
+                .agg(DailyPnL=("Profit", "sum"))
+                .sort_index()
+            )
+
             colors = [get_color_for_pnl(x) for x in daily_local["DailyPnL"]]
+
             fig_bar = go.Figure()
-            fig_bar.add_trace(go.Bar(x=daily_local.index, y=daily_local["DailyPnL"], marker_color=colors))
-            fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=260, margin=dict(t=10,b=10,l=10,r=10), xaxis=dict(showgrid=False, color="#94a3b8"), yaxis=dict(showgrid=False, color="#94a3b8"))
+            fig_bar.add_trace(
+                go.Bar(
+                    x=daily_local.index,
+                    y=daily_local["DailyPnL"],
+                    marker_color=colors
+                )
+            )
+
+            fig_bar.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=260,
+                margin=dict(t=10, b=10, l=10, r=10),
+                xaxis=dict(showgrid=False, color="#94a3b8"),
+                yaxis=dict(showgrid=False, color="#94a3b8"),
+            )
+
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
             st.info("No daily P&L data.")
     except Exception as e:
         st.error(f"Failed to draw daily P&L: {e}")
+
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ---------------- Bottom row: Recent Trades and Calendar ----------------
 left_bot, right_bot = st.columns([1.6, 1.4])
@@ -722,80 +827,139 @@ with left_bot:
 
 with right_bot:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<div style='display:flex;justify-content:space-between;align-items:center'><strong>Calendar / Activity</strong></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='display:flex;justify-content:space-between;align-items:center'>"
+        "<strong>Calendar / Activity</strong></div>",
+        unsafe_allow_html=True
+    )
 
-    # calendar month state: default to current month (EAT aware)
+    # ---------------- Calendar month state (EAT) ----------------
     if "calendar_month" not in st.session_state:
-        today = (datetime.utcnow() + timedelta(hours=3)).date()  # Nairobi date
+        today = (datetime.utcnow() + timedelta(hours=3)).date()  # Nairobi time
         st.session_state["calendar_month"] = date(today.year, today.month, 1)
 
-    # header controls
-    cal_col_left, cal_col_title, cal_col_right = st.columns([1,2,1])
+    # ---------------- Header controls ----------------
+    cal_col_left, cal_col_title, cal_col_right = st.columns([1, 2, 1])
+
     with cal_col_left:
         if st.button("◀"):
             cur = st.session_state["calendar_month"]
-            prev_month = (cur.replace(day=1) - timedelta(days=1)).replace(day=1)
-            st.session_state["calendar_month"] = prev_month
+            st.session_state["calendar_month"] = (
+                (cur.replace(day=1) - timedelta(days=1)).replace(day=1)
+            )
+
     display_start = st.session_state["calendar_month"].replace(day=1)
-    month_label = display_start.strftime("%B %Y")
-    cal_col_title.markdown(f"<div style='text-align:center; font-weight:700; font-size:14px'>{month_label}</div>", unsafe_allow_html=True)
+    display_end = (pd.Timestamp(display_start) + pd.offsets.MonthEnd(0)).date()
+
+    cal_col_title.markdown(
+        f"<div style='text-align:center;font-weight:700;font-size:14px'>"
+        f"{display_start.strftime('%B %Y')}</div>",
+        unsafe_allow_html=True
+    )
+
     with cal_col_right:
         if st.button("▶"):
             cur = st.session_state["calendar_month"]
-            next_month = (cur.replace(day=28) + timedelta(days=8)).replace(day=1)
-            st.session_state["calendar_month"] = next_month
+            st.session_state["calendar_month"] = (
+                (cur.replace(day=28) + timedelta(days=8)).replace(day=1)
+            )
 
-    display_end = (pd.Timestamp(display_start) + pd.offsets.MonthEnd(0)).date()
-
-    # build stats map
+    # ---------------- Build stats map ----------------
     if len(filtered) > 0:
-        stats = filtered.groupby(filtered["Date"].dt.date).agg(DailyPnL=("Profit","sum"), Trades=("Ticket","count")).reset_index()
-        stats_map = {r["Date"]: {"pnl": r["DailyPnL"], "trades": int(r["Trades"]) } for _, r in stats.iterrows()}
+        stats = (
+            filtered
+            .groupby(filtered["Date"].dt.date)
+            .agg(DailyPnL=("Profit", "sum"), Trades=("Ticket", "count"))
+            .reset_index()
+        )
+        stats_map = {
+            r["Date"]: {"pnl": r["DailyPnL"], "trades": int(r["Trades"])}
+            for _, r in stats.iterrows()
+        }
     else:
         stats_map = {}
 
-    # Monthly total PnL
-    month_mask = (filtered["Date"].dt.date >= display_start) & (filtered["Date"].dt.date <= display_end) if len(filtered) > 0 else pd.Series([], dtype=bool)
+    # ---------------- Monthly total ----------------
+    month_mask = (
+        (filtered["Date"].dt.date >= display_start)
+        & (filtered["Date"].dt.date <= display_end)
+        if len(filtered) > 0 else pd.Series([], dtype=bool)
+    )
+
     monthly_total = filtered.loc[month_mask, "Profit"].sum() if len(filtered) > 0 else 0.0
-    monthly_color = "#26a269" if monthly_total > 0 else ("#ff5b5b" if monthly_total < 0 else "#9ca3af")
+    monthly_color = "#26a269" if monthly_total > 0 else (
+        "#ff5b5b" if monthly_total < 0 else "#9ca3af"
+    )
+
     st.markdown(
-        f"<div style='text-align:right; font-weight:700; font-size:13px; color:{monthly_color}'>"
+        f"<div style='text-align:right;font-weight:700;font-size:13px;color:{monthly_color}'>"
         f"Monthly total PnL: ${monthly_total:+,.2f}</div>",
         unsafe_allow_html=True
     )
 
-    # compute calendar range
-    first_sunday = display_start - timedelta(days=(display_start.weekday()+1)%7)
-    last_saturday = display_end + timedelta(days=(6-display_end.weekday())%7)
+    # ---------------- Calendar range ----------------
+    first_sunday = display_start - timedelta(days=(display_start.weekday() + 1) % 7)
+    last_saturday = display_end + timedelta(days=(6 - display_end.weekday()) % 7)
     all_dates = pd.date_range(first_sunday, last_saturday).date
 
+    # ---------------- Calendar HTML ----------------
     cal_html = "<div class='calendar-grid'>"
+
+    # Day headers
+    day_headers = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "W"]
+    for d in day_headers:
+        cal_html += f"<div class='calendar-header'>{d}</div>"
+
     weekly_total = 0
     weekly_trades = 0
-    for i, dt in enumerate(all_dates):
-        data = stats_map.get(dt, {"pnl":0,"trades":0})
+
+    for dt in all_dates:
+        data = stats_map.get(dt, {"pnl": 0, "trades": 0})
+
         if display_start <= dt <= display_end:
-            cls = "positive" if data["pnl"]>0 else ("negative" if data["pnl"]<0 else "neutral")
-            pnl_txt = f"${data['pnl']:+,.0f}"
-            trades_txt = f"{data['trades']} trades"
-            cal_html += f"<div class='calendar-day {cls}'><div class='day-num'>{dt.day}</div><div style='font-size:11px;text-align:center'>{trades_txt}<br>{pnl_txt}</div></div>"
+            cls = (
+                "positive" if data["pnl"] > 0
+                else "negative" if data["pnl"] < 0
+                else "neutral"
+            )
+            cal_html += (
+                f"<div class='calendar-day {cls}'>"
+                f"<div class='day-num'>{dt.day}</div>"
+                f"<div style='font-size:11px;text-align:center'>"
+                f"{data['trades']} trades<br>${data['pnl']:+,.0f}</div></div>"
+            )
         else:
-            cal_html += f"<div class='calendar-day neutral' style='opacity:0.25'><div class='day-num'>{dt.day}</div></div>"
+            cal_html += (
+                f"<div class='calendar-day neutral' style='opacity:0.25'>"
+                f"<div class='day-num'>{dt.day}</div></div>"
+            )
+
         weekly_total += data["pnl"]
         weekly_trades += data["trades"]
-        # Saturday -> append weekly summary
+
+        # Saturday → weekly summary column
         if dt.weekday() == 5:
-            cls_week = "positive" if weekly_total>0 else ("negative" if weekly_total<0 else "neutral")
+            cls_week = (
+                "positive" if weekly_total > 0
+                else "negative" if weekly_total < 0
+                else "neutral"
+            )
             week_label = "W" if weekly_total >= 0 else "L"
             week_color = "#26a269" if weekly_total >= 0 else "#ff5b5b"
+
             cal_html += (
-                f"<div class='calendar-day weekly-summary' style='background-color:#333;color:{week_color};'>"
+                f"<div class='calendar-day weekly-summary' "
+                f"style='background:#111827;color:{week_color}'>"
                 f"<div class='day-num'>{week_label}</div>"
-                f"<div style='font-size:12px'>{weekly_trades} trades<br>${weekly_total:+,.0f}</div></div>"
+                f"<div style='font-size:12px'>{weekly_trades} trades<br>"
+                f"${weekly_total:+,.0f}</div></div>"
             )
+
             weekly_total = 0
             weekly_trades = 0
+
     cal_html += "</div>"
+
     st.markdown(cal_html, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
