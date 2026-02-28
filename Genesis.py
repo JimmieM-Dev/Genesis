@@ -7,6 +7,66 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
+from supabase import create_client, Client
+
+# ---------------- Supabase Setup ----------------
+
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+# ---------------- Authentication ----------------
+
+def login():
+    st.subheader("Login")
+
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        try:
+            user = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
+            st.session_state.user = user
+            st.success("Logged in successfully!")
+            st.rerun()
+        except Exception:
+            st.error("Invalid credentials")
+
+
+def signup():
+    st.subheader("Sign Up")
+
+    email = st.text_input("New Email")
+    password = st.text_input("New Password", type="password")
+
+    if st.button("Create Account"):
+        try:
+            supabase.auth.sign_up({
+                "email": email,
+                "password": password
+            })
+            st.success("Account created! You can now log in.")
+        except Exception:
+            st.error("Error creating account")
+
+# ---------------- Protect App ----------------
+
+if st.session_state.user is None:
+    choice = st.radio("Choose Option", ["Login", "Sign Up"])
+
+    if choice == "Login":
+        login()
+    else:
+        signup()
+
+    st.stop()
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="TradeZella — Pixel-Perfect Clone (Final)", layout="wide")
@@ -1321,4 +1381,5 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
