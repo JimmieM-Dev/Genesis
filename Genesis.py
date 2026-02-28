@@ -47,37 +47,64 @@ def login():
             st.error(f"Invalid credentials: {e}")
 
 
-def signup():
-    st.subheader("Sign Up")
+# ---------------- Invite-Only Signup ----------------
 
+def signup():
+    st.subheader("Sign Up (Invite Only)")
+
+    display_name = st.text_input("Your Name", key="signup_name")
     email = st.text_input("New Email", key="signup_email")
     password = st.text_input("New Password", type="password", key="signup_password")
+    invite_code = st.text_input("Invite Code", key="signup_invite")
 
     if st.button("Create Account"):
-        if not email or not password:
-            st.error("Please enter both email and password")
+        if not display_name or not email or not password or not invite_code:
+            st.error("All fields are required")
             return
+
         if len(password) < 6:
             st.error("Password must be at least 6 characters")
             return
+
+        # Check invite code in database
+        invite_check = supabase.table("invite_codes") \
+            .select("*") \
+            .eq("code", invite_code) \
+            .eq("is_used", False) \
+            .execute()
+
+        if not invite_check.data:
+            st.error("Invalid or already used invite code")
+            return
+
         try:
+            # Create user
             res = supabase.auth.sign_up({
                 "email": email,
-                "password": password
+                "password": password,
+                "options": {
+                    "data": {"full_name": display_name}
+                }
             })
 
             if res.user is None:
-                # Email confirmation required
-                st.info("Signup successful! Please check your email to confirm your account.")
+                st.info("Check your email to confirm your account.")
             else:
-                # User created successfully; log them in automatically
+                # Mark invite code as used
+                supabase.table("invite_codes") \
+                    .update({
+                        "is_used": True,
+                        "used_by": res.user.id
+                    }) \
+                    .eq("code", invite_code) \
+                    .execute()
+
                 st.session_state.user = res.user
-                st.success("Account created and logged in successfully!")
+                st.success("Account created successfully!")
                 st.rerun()
 
         except Exception as e:
-            st.error(f"Error creating account: {e}")
-            
+            st.error(f"Signup failed: {e}")
 # ---------------- Protect App ----------------
 
 if st.session_state.user is None:
@@ -1414,6 +1441,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
