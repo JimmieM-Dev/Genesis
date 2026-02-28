@@ -555,7 +555,7 @@ wins = filtered["Win"].sum() if "Win" in filtered.columns else filtered[filtered
 win_rate = (wins / total_trades * 100) if total_trades else 0.0
 avg_win_loss_ratio = (avg_win/avg_loss) if avg_loss>0 else (avg_win if avg_win>0 else 0.0)
 
-# ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
+# ---------------- Header (dynamic greeting using EAT Nairobi time + user name) ----------------
 from datetime import datetime as _dt, timedelta as _td
 
 # Nairobi is UTC+3 (EAT)
@@ -563,6 +563,7 @@ now_utc = datetime.utcnow()
 now_eat = now_utc + timedelta(hours=3)
 hour = now_eat.hour
 
+# Determine greeting based on hour
 if 5 <= hour < 12:
     greet = "Good morning"
 elif 12 <= hour < 17:
@@ -570,10 +571,21 @@ elif 12 <= hour < 17:
 else:
     greet = "Good evening"
 
+# Get the logged-in user's name from Supabase (if available)
+user_name = None
+if st.session_state.get("user") and hasattr(st.session_state.user, "user_metadata"):
+    user_name = st.session_state.user.user_metadata.get("full_name", None)
+
+# Combine greeting + name
+if user_name:
+    greet_text = f"{greet}, {user_name}!"
+else:
+    greet_text = f"{greet}!"
+
 header_left, header_right = st.columns([1,2])
 with header_left:
     st.markdown(
-        f"<div style='padding:6px 0; font-size:16px; font-weight:700'>{greet}!</div>",
+        f"<div style='padding:6px 0; font-size:16px; font-weight:700'>{greet_text}</div>",
         unsafe_allow_html=True
     )
 
@@ -643,7 +655,6 @@ if st.session_state["edit_widgets_open"]:
         for k in v:
             new_v[k] = st.checkbox(k, value=v[k], key=f"vis_{k}")
         st.session_state["visible_metrics"] = new_v
-
 # ---------------- Top metrics ----------------
 col_net, col_exp, col_pf, col_winpct, col_awl = st.columns([1.2, 0.8, 0.8, 0.8, 1.2])
 
@@ -1403,6 +1414,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
