@@ -49,6 +49,7 @@ def login():
 def signup():
     st.subheader("Sign Up (Invite Only)")
 
+    # User inputs
     display_name = st.text_input("Your Name", key="signup_name")
     email = st.text_input("New Email", key="signup_email")
     password = st.text_input("New Password", type="password", key="signup_password")
@@ -56,7 +57,7 @@ def signup():
 
     if st.button("Create Account"):
 
-        # Basic validation
+        # ---------------- Basic validation ----------------
         if not display_name or not email or not password or not invite_code:
             st.error("All fields are required")
             return
@@ -96,14 +97,14 @@ def signup():
             return
 
         # ---------------- Check If Email Already Exists ----------------
-        existing_profile = supabase.table("profiles") \
-            .select("*") \
-            .eq("email", email) \
-            .execute()
-
-        if existing_profile.data:
-            st.error("Account with this email already exists. Use login or reset password.")
-            return
+        try:
+            existing_user = supabase.auth.admin.get_user_by_email(email)
+            if existing_user.user is not None:
+                st.error("Account with this email already exists. Use login or reset password.")
+                return
+        except Exception:
+            # If error occurs, assume user does not exist
+            pass
 
         # ---------------- Create User ----------------
         try:
@@ -113,6 +114,7 @@ def signup():
                 "options": {"data": {"full_name": display_name}}
             })
 
+            # Handle signup errors
             if hasattr(res, "error") and res.error:
                 st.error(res.error.message)
                 return
@@ -121,6 +123,8 @@ def signup():
                 st.info("Check your email to confirm your account.")
                 return
 
+            user_id = res.user.id
+
             # ---------------- Update Invite Usage ----------------
             supabase.table("invite_codes") \
                 .update({"uses_count": invite["uses_count"] + 1}) \
@@ -128,9 +132,9 @@ def signup():
                 .execute()
 
             # ---------------- Create Profile ----------------
+            # Ensure it matches your table schema (id = user.id)
             supabase.table("profiles").insert({
-                "id": res.user.id,
-                "email": email,  # <-- store email for future duplicate checks
+                "id": user_id,
                 "full_name": display_name,
                 "subscription_tier": "free"
             }).execute()
@@ -1492,6 +1496,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
