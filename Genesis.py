@@ -640,7 +640,7 @@ now_utc = datetime.utcnow()
 now_eat = now_utc + timedelta(hours=3)
 hour = now_eat.hour
 
-# Determine greeting based on hour
+# Determine greeting
 if 5 <= hour < 12:
     greet = "Good morning"
 elif 12 <= hour < 17:
@@ -648,13 +648,24 @@ elif 12 <= hour < 17:
 else:
     greet = "Good evening"
 
-# Get the logged-in user's name from profiles table (most reliable)
+# ---------------- Fetch Name From Profiles ----------------
 user_name = None
+
 if st.session_state.get("user"):
     user_id = st.session_state.user.id
-    profile_res = supabase.table("profiles").select("full_name").eq("id", user_id).execute()
-    if profile_res.data:
-        user_name = profile_res.data[0]["full_name"]
+
+    try:
+        profile_res = supabase.table("profiles") \
+            .select("full_name") \
+            .eq("id", user_id) \
+            .single() \
+            .execute()
+
+        if profile_res.data:
+            user_name = profile_res.data["full_name"]
+
+    except Exception:
+        user_name = None
 
 # Combine greeting + name
 if user_name:
@@ -662,7 +673,7 @@ if user_name:
 else:
     greet_text = f"{greet}!"
 
-# ---------------- Header layout ----------------
+# ---------------- Layout ----------------
 header_left, header_right = st.columns([1, 2])
 
 with header_left:
@@ -674,27 +685,25 @@ with header_left:
 with header_right:
     cols = st.columns([2, 1, 1, 1])
 
-    # Get last import timestamp and convert to EAT
     last_ts = st.session_state.get("last_import_ts")
+
     if last_ts:
-        last_import_eat = last_ts + timedelta(hours=3)  # Convert UTC -> EAT
+        last_import_eat = last_ts + timedelta(hours=3)
         last_import_text = last_import_eat.strftime("%Y-%m-%d %H:%M:%S")
     else:
         last_import_text = "No imports yet"
 
-    # Display last import
     cols[1].markdown(
         f"<div style='text-align:right; color:#9CA3AF; font-size:13px'>Last import: "
         f"<strong style='color:white'>{last_import_text}</strong></div>",
         unsafe_allow_html=True
     )
 
-    # Buttons
     if cols[2].button("Edit Widgets"):
         st.session_state["edit_widgets_open"] = not st.session_state.get("edit_widgets_open", False)
+
     if cols[3].button("+ Import trades"):
         st.session_state["show_top_uploader"] = not st.session_state.get("show_top_uploader", False)
-
 # ---------------- Inline uploader ----------------
 if st.session_state.get("show_top_uploader", False):
     st.markdown("<div class='card' style='margin-top:8px'>", unsafe_allow_html=True)
@@ -1506,6 +1515,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
