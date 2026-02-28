@@ -45,7 +45,6 @@ def login():
                 st.rerun()
         except Exception as e:
             st.error(f"Invalid credentials: {e}")
-
 # ---------------- Invite-Only Signup with Duplicate Email Check ----------------
 def signup():
     st.subheader("Sign Up (Invite Only)")
@@ -82,10 +81,9 @@ def signup():
         invite = invite_check.data[0]
 
         # Check usage limits
-        if invite["max_uses"] is not None:
-            if invite["uses_count"] >= invite["max_uses"]:
-                st.error("Invite code has reached its usage limit")
-                return
+        if invite["max_uses"] is not None and invite["uses_count"] >= invite["max_uses"]:
+            st.error("Invite code has reached its usage limit")
+            return
 
         # ---------------- Check If Email Is Banned ----------------
         ban_check = supabase.table("banned_users") \
@@ -98,8 +96,12 @@ def signup():
             return
 
         # ---------------- Check If Email Already Exists ----------------
-        existing_user = supabase.auth.admin.get_user_by_email(email)
-        if existing_user.user is not None:
+        existing_profile = supabase.table("profiles") \
+            .select("*") \
+            .eq("email", email) \
+            .execute()
+
+        if existing_profile.data:
             st.error("Account with this email already exists. Use login or reset password.")
             return
 
@@ -108,9 +110,7 @@ def signup():
             res = supabase.auth.sign_up({
                 "email": email,
                 "password": password,
-                "options": {
-                    "data": {"full_name": display_name}
-                }
+                "options": {"data": {"full_name": display_name}}
             })
 
             if hasattr(res, "error") and res.error:
@@ -123,15 +123,14 @@ def signup():
 
             # ---------------- Update Invite Usage ----------------
             supabase.table("invite_codes") \
-                .update({
-                    "uses_count": invite["uses_count"] + 1
-                }) \
+                .update({"uses_count": invite["uses_count"] + 1}) \
                 .eq("id", invite["id"]) \
                 .execute()
 
             # ---------------- Create Profile ----------------
             supabase.table("profiles").insert({
                 "id": res.user.id,
+                "email": email,  # <-- store email for future duplicate checks
                 "full_name": display_name,
                 "subscription_tier": "free"
             }).execute()
@@ -142,7 +141,6 @@ def signup():
 
         except Exception as e:
             st.error(f"Signup failed: {e}")
-            
 # ---------------- Protect App ----------------
 
 if st.session_state.user is None:
@@ -1479,6 +1477,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
