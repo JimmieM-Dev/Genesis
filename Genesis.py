@@ -46,8 +46,7 @@ def login():
         except Exception as e:
             st.error(f"Invalid credentials: {e}")
 
-# ---------------- Invite-Only Signup ----------------
-
+# ---------------- Invite-Only Signup with Duplicate Email Check ----------------
 def signup():
     st.subheader("Sign Up (Invite Only)")
 
@@ -98,6 +97,12 @@ def signup():
             st.error("This email has been banned.")
             return
 
+        # ---------------- Check If Email Already Exists ----------------
+        existing_user = supabase.auth.admin.get_user_by_email(email)
+        if existing_user.user is not None:
+            st.error("Account with this email already exists. Use login or reset password.")
+            return
+
         # ---------------- Create User ----------------
         try:
             res = supabase.auth.sign_up({
@@ -108,13 +113,12 @@ def signup():
                 }
             })
 
-            # Handle duplicate email or failure
             if hasattr(res, "error") and res.error:
                 st.error(res.error.message)
                 return
 
             if res.user is None:
-                st.error("Account already exists or email confirmation required.")
+                st.info("Check your email to confirm your account.")
                 return
 
             # ---------------- Update Invite Usage ----------------
@@ -1475,6 +1479,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
