@@ -46,7 +46,6 @@ def login():
         except Exception as e:
             st.error(f"Invalid credentials: {e}")
 
-
 # ---------------- Invite-Only Signup ----------------
 
 def signup():
@@ -58,6 +57,8 @@ def signup():
     invite_code = st.text_input("Invite Code", key="signup_invite")
 
     if st.button("Create Account"):
+
+        # Basic validation
         if not display_name or not email or not password or not invite_code:
             st.error("All fields are required")
             return
@@ -66,19 +67,39 @@ def signup():
             st.error("Password must be at least 6 characters")
             return
 
-        # Check invite code in database
+        invite_code_clean = invite_code.strip().upper()
+
+        # ---------------- Check Invite Code ----------------
         invite_check = supabase.table("invite_codes") \
             .select("*") \
-            .eq("code", invite_code) \
-            .eq("is_used", False) \
+            .eq("code", invite_code_clean) \
+            .eq("is_active", True) \
             .execute()
 
         if not invite_check.data:
-            st.error("Invalid or already used invite code")
+            st.error("Invalid invite code")
             return
 
+        invite = invite_check.data[0]
+
+        # Check usage limits
+        if invite["max_uses"] is not None:
+            if invite["uses_count"] >= invite["max_uses"]:
+                st.error("Invite code has reached its usage limit")
+                return
+
+        # ---------------- Check If Email Is Banned ----------------
+        ban_check = supabase.table("banned_users") \
+            .select("*") \
+            .eq("email", email) \
+            .execute()
+
+        if ban_check.data:
+            st.error("This email has been banned.")
+            return
+
+        # ---------------- Create User ----------------
         try:
-            # Create user
             res = supabase.auth.sign_up({
                 "email": email,
                 "password": password,
@@ -87,24 +108,37 @@ def signup():
                 }
             })
 
-            if res.user is None:
-                st.info("Check your email to confirm your account.")
-            else:
-                # Mark invite code as used
-                supabase.table("invite_codes") \
-                    .update({
-                        "is_used": True,
-                        "used_by": res.user.id
-                    }) \
-                    .eq("code", invite_code) \
-                    .execute()
+            # Handle duplicate email or failure
+            if hasattr(res, "error") and res.error:
+                st.error(res.error.message)
+                return
 
-                st.session_state.user = res.user
-                st.success("Account created successfully!")
-                st.rerun()
+            if res.user is None:
+                st.error("Account already exists or email confirmation required.")
+                return
+
+            # ---------------- Update Invite Usage ----------------
+            supabase.table("invite_codes") \
+                .update({
+                    "uses_count": invite["uses_count"] + 1
+                }) \
+                .eq("id", invite["id"]) \
+                .execute()
+
+            # ---------------- Create Profile ----------------
+            supabase.table("profiles").insert({
+                "id": res.user.id,
+                "full_name": display_name,
+                "subscription_tier": "free"
+            }).execute()
+
+            st.success("Account created successfully! Please confirm your email.")
+            st.session_state.user = res.user
+            st.rerun()
 
         except Exception as e:
             st.error(f"Signup failed: {e}")
+            
 # ---------------- Protect App ----------------
 
 if st.session_state.user is None:
@@ -1441,6 +1475,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
