@@ -647,7 +647,19 @@ if user_name:
     greet_text = f"{greet}, {user_name}!"
 else:
     greet_text = f"{greet}!"
-    
+
+# ---------------- Header layout ----------------
+header_left, header_right = st.columns([1, 2])
+
+with header_left:
+    st.markdown(
+        f"<div style='padding:6px 0; font-size:16px; font-weight:700'>{greet_text}</div>",
+        unsafe_allow_html=True
+    )
+
+with header_right:
+    cols = st.columns([2, 1, 1, 1])
+
     # Get last import timestamp and convert to EAT
     last_ts = st.session_state.get("last_import_ts")
     if last_ts:
@@ -656,27 +668,31 @@ else:
     else:
         last_import_text = "No imports yet"
 
+    # Display last import
     cols[1].markdown(
         f"<div style='text-align:right; color:#9CA3AF; font-size:13px'>Last import: "
         f"<strong style='color:white'>{last_import_text}</strong></div>",
         unsafe_allow_html=True
     )
 
+    # Buttons
     if cols[2].button("Edit Widgets"):
-        st.session_state["edit_widgets_open"] = not st.session_state["edit_widgets_open"]
+        st.session_state["edit_widgets_open"] = not st.session_state.get("edit_widgets_open", False)
     if cols[3].button("+ Import trades"):
-        st.session_state["show_top_uploader"] = not st.session_state["show_top_uploader"]
+        st.session_state["show_top_uploader"] = not st.session_state.get("show_top_uploader", False)
 
-# Inline uploader
+# ---------------- Inline uploader ----------------
 if st.session_state.get("show_top_uploader", False):
     st.markdown("<div class='card' style='margin-top:8px'>", unsafe_allow_html=True)
     st.markdown("<div style='display:flex;align-items:center;gap:12px'>", unsafe_allow_html=True)
+
     uploaded = st.file_uploader(
-        "Drop files here or click to browse (CSV / XLSX)", 
-        accept_multiple_files=True, key="top_uploader"
+        "Drop files here or click to browse (CSV / XLSX)",
+        accept_multiple_files=True,
+        key="top_uploader"
     )
     top_name = st.text_input("Name this import (optional)", key="top_name")
-    
+
     if st.button("Add upload(s) (top)"):
         if not uploaded:
             st.warning("Choose file(s) first")
@@ -688,19 +704,25 @@ if st.session_state.get("show_top_uploader", False):
                         raw = pd.read_csv(f)
                     else:
                         raw = pd.read_excel(f, engine="openpyxl")
+
                     raw_norm, grouped = process_mt5_df(raw)
+
                     key = top_name.strip() or f.name
                     base, i = key, 1
                     while key in st.session_state["imports"]:
-                        key = f"{base} ({i})"; i += 1
+                        key = f"{base} ({i})"
+                        i += 1
+
                     st.session_state["imports"][key] = {"raw": raw_norm, "grouped": grouped}
                     added.append(key)
                 except Exception as e:
                     st.error(f"Failed {f.name}: {e}")
+
             if added:
                 st.success(f"Added: {', '.join(added)}")
                 st.session_state["last_added"] = added[-1]
                 st.session_state["last_import_ts"] = datetime.utcnow()  # Store UTC
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Edit widgets toggles
@@ -1470,6 +1492,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
