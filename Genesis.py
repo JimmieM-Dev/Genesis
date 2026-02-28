@@ -31,6 +31,7 @@ def login():
         if not email or not password:
             st.error("Please enter both email and password")
             return
+
         try:
             res = supabase.auth.sign_in_with_password({
                 "email": email,
@@ -39,12 +40,21 @@ def login():
 
             if res.user is None:
                 st.error("Login failed: Please confirm your email first")
-            else:
-                st.session_state.user = res.user
-                st.success("Logged in successfully!")
-                st.rerun()
+                return
+
+            # 🔥 THIS IS THE MISSING PIECE
+            supabase.auth.set_session(
+                res.session.access_token,
+                res.session.refresh_token
+            )
+
+            st.session_state.user = res.user
+            st.success("Logged in successfully!")
+            st.rerun()
+
         except Exception as e:
             st.error(f"Invalid credentials: {e}")
+            
 # ---------------- Invite-Only Signup with Duplicate Email Check ----------------
 def signup():
     st.subheader("Sign Up (Invite Only)")
@@ -1496,6 +1506,7 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
+
 
 
 
