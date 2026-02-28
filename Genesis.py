@@ -53,61 +53,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-import streamlit as st
-from supabase import create_client, Client
 
-SUPABASE_URL = "YOUR_URL"
-SUPABASE_KEY = "YOUR_ANON_KEY"
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-def login():
-    st.subheader("Login")
-
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        try:
-            user = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
-            st.session_state.user = user
-            st.success("Logged in successfully!")
-            st.rerun()
-        except Exception as e:
-            st.error("Invalid credentials")
-
-
-def signup():
-    st.subheader("Sign Up")
-
-    email = st.text_input("New Email")
-    password = st.text_input("New Password", type="password")
-
-    if st.button("Create Account"):
-        try:
-            supabase.auth.sign_up({
-                "email": email,
-                "password": password
-            })
-            st.success("Account created! You can now log in.")
-        except Exception as e:
-            st.error("Error creating account")
-
-if st.session_state.user is None:
-    choice = st.radio("Choose", ["Login", "Sign Up"])
-
-    if choice == "Login":
-        login()
-    else:
-        signup()
-
-    st.stop()
 # ---------------- Utilities ----------------
 def parse_time(x):
     if pd.isna(x):
