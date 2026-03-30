@@ -7,165 +7,6 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
-from supabase import create_client, Client
-
-# ---------------- Supabase Setup ----------------
-
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-if "user" not in st.session_state:
-    st.session_state.user = None
-
-# ---------------- Authentication ----------------
-
-def login():
-    st.subheader("Login")
-
-    email = st.text_input("Email", key="login_email")
-    password = st.text_input("Password", type="password", key="login_password")
-
-    if st.button("Login"):
-        if not email or not password:
-            st.error("Please enter both email and password")
-            return
-
-        try:
-            res = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
-
-            if res.user is None:
-                st.error("Login failed: Please confirm your email first")
-                return
-
-            # 🔥 THIS IS THE MISSING PIECE
-            supabase.auth.set_session(
-                res.session.access_token,
-                res.session.refresh_token
-            )
-
-            st.session_state.user = res.user
-            st.success("Logged in successfully!")
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Invalid credentials: {e}")
-            
-# ---------------- Invite-Only Signup with Duplicate Email Check ----------------
-def signup():
-    st.subheader("Sign Up (Invite Only)")
-
-    # User inputs
-    display_name = st.text_input("Your Name", key="signup_name")
-    email = st.text_input("New Email", key="signup_email")
-    password = st.text_input("New Password", type="password", key="signup_password")
-    invite_code = st.text_input("Invite Code", key="signup_invite")
-
-    if st.button("Create Account"):
-
-        # ---------------- Basic validation ----------------
-        if not display_name or not email or not password or not invite_code:
-            st.error("All fields are required")
-            return
-
-        if len(password) < 6:
-            st.error("Password must be at least 6 characters")
-            return
-
-        invite_code_clean = invite_code.strip().upper()
-
-        # ---------------- Check Invite Code ----------------
-        invite_check = supabase.table("invite_codes") \
-            .select("*") \
-            .eq("code", invite_code_clean) \
-            .eq("is_active", True) \
-            .execute()
-
-        if not invite_check.data:
-            st.error("Invalid invite code")
-            return
-
-        invite = invite_check.data[0]
-
-        # Check usage limits
-        if invite["max_uses"] is not None and invite["uses_count"] >= invite["max_uses"]:
-            st.error("Invite code has reached its usage limit")
-            return
-
-        # ---------------- Check If Email Is Banned ----------------
-        ban_check = supabase.table("banned_users") \
-            .select("*") \
-            .eq("email", email) \
-            .execute()
-
-        if ban_check.data:
-            st.error("This email has been banned.")
-            return
-
-        # ---------------- Check If Email Already Exists ----------------
-        try:
-            existing_user = supabase.auth.admin.get_user_by_email(email)
-            if existing_user.user is not None:
-                st.error("Account with this email already exists. Use login or reset password.")
-                return
-        except Exception:
-            # If error occurs, assume user does not exist
-            pass
-
-        # ---------------- Create User ----------------
-        try:
-            res = supabase.auth.sign_up({
-                "email": email,
-                "password": password,
-                "options": {"data": {"full_name": display_name}}
-            })
-
-            # Handle signup errors
-            if hasattr(res, "error") and res.error:
-                st.error(res.error.message)
-                return
-
-            if res.user is None:
-                st.info("Check your email to confirm your account.")
-                return
-
-            user_id = res.user.id
-
-            # ---------------- Update Invite Usage ----------------
-            supabase.table("invite_codes") \
-                .update({"uses_count": invite["uses_count"] + 1}) \
-                .eq("id", invite["id"]) \
-                .execute()
-
-            # ---------------- Create Profile ----------------
-            # Ensure it matches your table schema (id = user.id)
-            supabase.table("profiles").insert({
-                "id": user_id,
-                "full_name": display_name,
-                "subscription_tier": "free"
-            }).execute()
-
-            st.success("Account created successfully! Please confirm your email.")
-            st.session_state.user = res.user
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"Signup failed: {e}")
-# ---------------- Protect App ----------------
-
-if st.session_state.user is None:
-    choice = st.radio("Choose Option", ["Login", "Sign Up"])
-
-    if choice == "Login":
-        login()
-    else:
-        signup()
-
-    st.stop()
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="TradeZella — Pixel-Perfect Clone (Final)", layout="wide")
@@ -632,15 +473,14 @@ wins = filtered["Win"].sum() if "Win" in filtered.columns else filtered[filtered
 win_rate = (wins / total_trades * 100) if total_trades else 0.0
 avg_win_loss_ratio = (avg_win/avg_loss) if avg_loss>0 else (avg_win if avg_win>0 else 0.0)
 
-# ---------------- Header (dynamic greeting using EAT Nairobi time + user name) ----------------
-from datetime import datetime, timedelta
+# ---------------- Header (dynamic greeting using EAT Nairobi time) ----------------
+from datetime import datetime as _dt, timedelta as _td
 
 # Nairobi is UTC+3 (EAT)
 now_utc = datetime.utcnow()
 now_eat = now_utc + timedelta(hours=3)
 hour = now_eat.hour
 
-# Determine greeting
 if 5 <= hour < 12:
     greet = "Good morning"
 elif 12 <= hour < 17:
@@ -648,47 +488,20 @@ elif 12 <= hour < 17:
 else:
     greet = "Good evening"
 
-# ---------------- Fetch Name From Profiles ----------------
-user_name = None
-
-if st.session_state.get("user"):
-    user_id = st.session_state.user.id
-
-    try:
-        profile_res = supabase.table("profiles") \
-            .select("full_name") \
-            .eq("id", user_id) \
-            .single() \
-            .execute()
-
-        if profile_res.data:
-            user_name = profile_res.data["full_name"]
-
-    except Exception:
-        user_name = None
-
-# Combine greeting + name
-if user_name:
-    greet_text = f"{greet}, {user_name}!"
-else:
-    greet_text = f"{greet}!"
-
-# ---------------- Layout ----------------
-header_left, header_right = st.columns([1, 2])
-
+header_left, header_right = st.columns([1,2])
 with header_left:
     st.markdown(
-        f"<div style='padding:6px 0; font-size:16px; font-weight:700'>{greet_text}</div>",
+        f"<div style='padding:6px 0; font-size:16px; font-weight:700'>{greet}!</div>",
         unsafe_allow_html=True
     )
 
 with header_right:
-    cols = st.columns([2, 1, 1, 1])
-
+    cols = st.columns([2,1,1,1])
+    
+    # Get last import timestamp and convert to EAT
     last_ts = st.session_state.get("last_import_ts")
-
     if last_ts:
-        last_import_eat = last_ts + timedelta(hours=3)
+        last_import_eat = last_ts + timedelta(hours=3)  # Convert UTC -> EAT
         last_import_text = last_import_eat.strftime("%Y-%m-%d %H:%M:%S")
     else:
         last_import_text = "No imports yet"
@@ -700,22 +513,20 @@ with header_right:
     )
 
     if cols[2].button("Edit Widgets"):
-        st.session_state["edit_widgets_open"] = not st.session_state.get("edit_widgets_open", False)
-
+        st.session_state["edit_widgets_open"] = not st.session_state["edit_widgets_open"]
     if cols[3].button("+ Import trades"):
-        st.session_state["show_top_uploader"] = not st.session_state.get("show_top_uploader", False)
-# ---------------- Inline uploader ----------------
+        st.session_state["show_top_uploader"] = not st.session_state["show_top_uploader"]
+
+# Inline uploader
 if st.session_state.get("show_top_uploader", False):
     st.markdown("<div class='card' style='margin-top:8px'>", unsafe_allow_html=True)
     st.markdown("<div style='display:flex;align-items:center;gap:12px'>", unsafe_allow_html=True)
-
     uploaded = st.file_uploader(
-        "Drop files here or click to browse (CSV / XLSX)",
-        accept_multiple_files=True,
-        key="top_uploader"
+        "Drop files here or click to browse (CSV / XLSX)", 
+        accept_multiple_files=True, key="top_uploader"
     )
     top_name = st.text_input("Name this import (optional)", key="top_name")
-
+    
     if st.button("Add upload(s) (top)"):
         if not uploaded:
             st.warning("Choose file(s) first")
@@ -727,25 +538,19 @@ if st.session_state.get("show_top_uploader", False):
                         raw = pd.read_csv(f)
                     else:
                         raw = pd.read_excel(f, engine="openpyxl")
-
                     raw_norm, grouped = process_mt5_df(raw)
-
                     key = top_name.strip() or f.name
                     base, i = key, 1
                     while key in st.session_state["imports"]:
-                        key = f"{base} ({i})"
-                        i += 1
-
+                        key = f"{base} ({i})"; i += 1
                     st.session_state["imports"][key] = {"raw": raw_norm, "grouped": grouped}
                     added.append(key)
                 except Exception as e:
                     st.error(f"Failed {f.name}: {e}")
-
             if added:
                 st.success(f"Added: {', '.join(added)}")
                 st.session_state["last_added"] = added[-1]
                 st.session_state["last_import_ts"] = datetime.utcnow()  # Store UTC
-
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Edit widgets toggles
@@ -756,6 +561,7 @@ if st.session_state["edit_widgets_open"]:
         for k in v:
             new_v[k] = st.checkbox(k, value=v[k], key=f"vis_{k}")
         st.session_state["visible_metrics"] = new_v
+
 # ---------------- Top metrics ----------------
 col_net, col_exp, col_pf, col_winpct, col_awl = st.columns([1.2, 0.8, 0.8, 0.8, 1.2])
 
@@ -1515,16 +1321,5 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Footer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 st.markdown("<div style='text-align:center;color:#6b7280;font-size:12px'>Genesis — La Khari</div>", unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
 
 
