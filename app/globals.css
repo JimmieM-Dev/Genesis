@@ -1,0 +1,140 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), sans-serif;
+
+  --font-weight-500: 500;
+  --font-weight-600: 600;
+  --font-weight-700: 700;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-purple: var(--brand-purple);
+  --color-brand-magenta: var(--brand-magenta);
+
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-xl: calc(var(--radius) + 6px);
+  --radius-2xl: calc(var(--radius) + 12px);
+}
+
+:root {
+  --radius: 0.875rem;
+
+  /* Near-black base, matching the app */
+  --background: oklch(0.12 0.012 280);
+  --foreground: oklch(0.97 0.005 280);
+
+  --card: oklch(0.16 0.014 280);
+  --card-foreground: oklch(0.97 0.005 280);
+
+  --muted: oklch(0.2 0.014 280);
+  --muted-foreground: oklch(0.68 0.015 280);
+
+  --border: oklch(0.27 0.018 285 / 0.6);
+  --input: oklch(0.27 0.018 285 / 0.6);
+  --ring: oklch(0.62 0.2 290);
+
+  --primary: oklch(0.62 0.2 290);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.7 0.16 230);
+  --accent-foreground: oklch(0.99 0 0);
+
+  /* Brand spectrum */
+  --brand-cyan: oklch(0.78 0.14 210);
+  --brand-blue: oklch(0.62 0.2 260);
+  --brand-purple: oklch(0.6 0.22 295);
+  --brand-magenta: oklch(0.62 0.24 340);
+
+  --pos: oklch(0.74 0.18 150);
+  --neg: oklch(0.66 0.21 22);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .text-gradient-brand {
+    background-image: linear-gradient(
+      100deg,
+      var(--brand-cyan),
+      var(--brand-blue) 45%,
+      var(--brand-purple)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .bg-gradient-brand {
+    background-image: linear-gradient(
+      100deg,
+      var(--brand-cyan),
+      var(--brand-blue) 50%,
+      var(--brand-purple)
+    );
+  }
+
+  .border-gradient-brand {
+    border: 1px solid transparent;
+    background:
+      linear-gradient(var(--card), var(--card)) padding-box,
+      linear-gradient(120deg, var(--brand-cyan), var(--brand-purple)) border-box;
+  }
+
+  /* GENESIS wordmark with reversed E's */
+  .wordmark .flip {
+    display: inline-block;
+    transform: scaleX(-1);
+  }
+}
+
+/* Glow used behind CTAs and the hero card */
+.glow-brand {
+  box-shadow:
+    0 0 0 1px oklch(0.62 0.2 290 / 0.25),
+    0 20px 60px -20px oklch(0.6 0.22 295 / 0.55);
+}
+
+.grid-faint {
+  background-image:
+    linear-gradient(to right, oklch(0.5 0.05 285 / 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.5 0.05 285 / 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
